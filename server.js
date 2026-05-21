@@ -74,7 +74,7 @@ app.get('/auth/discord/callback',
     const userData = Buffer.from(JSON.stringify({
       id: req.user.id, username: req.user.username,
       displayName: req.user.displayName, avatar: req.user.avatar,
-      isAdmin: isAdmin(req.user)
+      isAdmin: isAdmin(req.user), isVipHost: isAdmin(req.user)||VIP_HOSTS.includes(nameOf(req.user))
     })).toString('base64');
     res.redirect(`${FRONTEND_URL}/hunt?auth=${encodeURIComponent(userData)}`);
   }
@@ -82,7 +82,7 @@ app.get('/auth/discord/callback',
 app.get('/auth/logout', (req, res) => req.logout(() => res.redirect(FRONTEND_URL)));
 app.get('/auth/me', (req, res) => {
   if (!req.user) return res.json({ user: null });
-  res.json({ user: { ...req.user, isAdmin: isAdmin(req.user) } });
+  res.json({ user: { ...req.user, isAdmin: isAdmin(req.user), isVipHost: isAdmin(req.user)||VIP_HOSTS.includes(nameOf(req.user)) } });
 });
 
 // ── State ──────────────────────────────────────────────────────────
