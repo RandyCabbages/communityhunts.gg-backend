@@ -341,6 +341,113 @@ setInterval(checkBeanLive, 5 * 60 * 1000);
 app.get('/api/bean-live', (req, res) => res.json(beanLive));
 
 // ── Health ─────────────────────────────────────────────────────────
+
+// ── Discord Import ────────────────────────────────────────────────
+const DISCORD_BOT_TOKEN       = process.env.DISCORD_BOT_TOKEN || '';
+const DISCORD_CALLS_CHANNEL   = process.env.DISCORD_CALLS_CHANNEL_ID || '';
+const DISCORD_WINNERS_CHANNEL = process.env.DISCORD_WINNERS_CHANNEL_ID || '';
+
+async function fetchDiscordMessages(channelId, limit = 100) {
+  if (!DISCORD_BOT_TOKEN || !channelId) throw new Error('Discord bot not configured');
+  const res = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages?limit=${limit}`, {
+    headers: { Authorization: `Bot ${DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' }
+  });
+  if (!res.ok) throw new Error(`Discord API error: ${res.status}`);
+  return res.json();
+}
+
+// Import slot calls from last 20 mins — anyone in the channel
+app.get('/api/discord/import-calls', requireAuth, async (req, res) => {
+  try {
+    const hunt = hunts[req.user.id];
+    if (!hunt) return res.status(404).json({ error: 'No active hunt' });
+
+    const messages = await fetchDiscordMessages(DISCORD_CALLS_CHANNEL, 100);
+    const cutoff   = Date.now() - 20 * 60 * 1000;
+    const recent = messages.filter(m => new Date(m.timestamp).getTime() > cutoff);
+
+    // Only available on VIP hunts
+    if (hunt.huntType !== 'vip') return res.status(403).json({ error: 'Discord import is only available on VIP hunts' });
+    const equityNames = (hunt.equity || []).filter(e => e.name).map(e => e.name.toLowerCase().trim());
+
+    const imported = [];
+    const existingSlots = new Set((hunt.calls || []).map(c => (c.slot||'').toLowerCase().trim()));
+
+    for (const msg of recent) {
+      const callerName = msg.member?.nick || msg.author?.global_name || msg.author?.username || '';
+      const author     = (msg.author?.username || '').toLowerCase().trim();
+      const nick       = (msg.member?.nick || '').toLowerCase().trim();
+      const globalName = (msg.author?.global_name || '').toLowerCase().trim();
+      const inEquity   = equityNames.some(n =>
+        n === author || n === nick || n === globalName ||
+        author.includes(n) || nick.includes(n) || n.includes(author)
+      );
+      if (!inEquity) continue;
+
+      // Strip @mentions and leading/trailing whitespace from content
+      let content = msg.content
+        .replace(/<@!?\d+>/g, '')   // strip discord @mentions
+        .replace(/@\w+/g, '')       // strip plain @mentions
+        .trim();
+
+      if (!content) continue;
+
+      // Split by comma or newline — each part is a slot call
+      const parts = content.split(/[,\n]/).map(p => p.trim()).filter(p => p.length > 1 && p.length < 80);
+
+      for (const part of parts) {
+        const slotName = part.replace(/^[#\-•*\d.]+\s*/, '').trim();
+        if (slotName && !existingSlots.has(slotName.toLowerCase())) {
+          imported.push({
+            id: `dc_${msg.id}_${imported.length}`,
+            slot: slotName,
+            caller: callerName,
+            status: 'pending',
+            source: 'discord'
+          });
+          existingSlots.add(slotName.toLowerCase());
+        }
+      }
+    }
+
+    res.json({ imported, count: imported.length });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Parse VIP winners from Discord — finds latest results message and extracts names
+app.get('/api/discord/parse-winners', requireAuth, async (req, res) => {
+  try {
+    const messages = await fetchDiscordMessages(DISCORD_WINNERS_CHANNEL, 50);
+
+    // Find the most recent message containing winner results (has "#1" and "Checked-In")
+    const resultsMsg = messages.find(m =>
+      m.content.includes('Checked-In') && m.content.includes('#1')
+    );
+    if (!resultsMsg) return res.json({ winners: [], count: 0, raw: 'No results message found in last 50 messages' });
+
+    // Parse lines like: #1    Jaycsk    144.949925    +45    Checked-In
+    const winners = [];
+    const lines = resultsMsg.content.split('\n');
+    for (const line of lines) {
+      const match = line.match(/^#(\d+)\s+(.+?)\s+(\d+\.\d+)\s+([+-]\d+)\s+Checked-In/);
+      if (match) {
+        winners.push({
+          place: parseInt(match[1]),
+          name:  match[2].trim(),
+          roll:  parseFloat(match[3]),
+          luck:  parseInt(match[4]),
+        });
+      }
+    }
+
+    res.json({ winners, count: winners.length });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get('/api/health', (req, res) => res.json({ok:true}));
 
 // ── Socket.io ─────────────────────────────────────────────────────
