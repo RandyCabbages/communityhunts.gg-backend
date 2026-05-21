@@ -365,8 +365,7 @@ app.get('/api/discord/import-calls', requireAuth, async (req, res) => {
     const cutoff   = Date.now() - 20 * 60 * 1000;
     const recent = messages.filter(m => new Date(m.timestamp).getTime() > cutoff);
 
-    // Only available on VIP hunts
-    if (hunt.huntType !== 'vip') return res.status(403).json({ error: 'Discord import is only available on VIP hunts' });
+    // Both hunt types: only import calls from equity members
     const equityNames = (hunt.equity || []).filter(e => e.name).map(e => e.name.toLowerCase().trim());
 
     const imported = [];
