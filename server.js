@@ -131,7 +131,7 @@ app.post('/api/my-hunt/start', requireAuth, (req, res) => {
     return res.status(403).json({error:'Not authorised for VIP hunts'});
   hunts[req.user.id] = {
     user: req.user, isLive: false, startedAt: null, archivedAt: null,
-    huntType, bonuses: [], equity: [], calls: [], invitedEditors: [], callLimit: 0, huntMode: 'creating'
+    huntType, bonuses: [], equity: huntType==='vip'?[{id:'bean_auto',name:'Bean',amount:1000,isRollWinner:false}]:[], calls: [], invitedEditors: [], callLimit: 0, huntMode: 'creating'
   };
   res.json({ok:true});
 });
