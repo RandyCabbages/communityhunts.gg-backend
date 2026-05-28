@@ -308,8 +308,8 @@ app.post('/api/admin/fetch-and-import-mitch-hunts', async (req, res) => {
   try {
     const allHunts = [];
     
-    // Fetch all pages from mitchjones API
-    for (let page = 0; page < 20; page++) {
+    // Fetch all pages from mitchjones API (skip page 0 - current hunt with no payouts)
+    for (let page = 1; page < 20; page++) {
       try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 5000);
@@ -326,43 +326,41 @@ app.post('/api/admin/fetch-and-import-mitch-hunts', async (req, res) => {
         
         const data = await response.json();
         
-        // Try different property names in case API structure varies
-        const hunts = data.hunts || data.data || data.results || [];
+        // API returns { data: [{ name, bonuses: [...] }, ...] }
+        const huntSessions = data.data || [];
         
-        if (!Array.isArray(hunts) || hunts.length === 0) {
-          console.log(`Page ${page}: No valid hunts array, breaking`);
+        if (!Array.isArray(huntSessions) || huntSessions.length === 0) {
+          console.log(`Page ${page}: No hunt sessions, breaking`);
           break;
         }
         
-        console.log(`Page ${page}: Got ${hunts.length} hunts`);
+        let pageHunts = 0;
         
-        // Log first hunt structure to see field names
-        if (page === 0 && hunts.length > 0) {
-          console.log(`Sample hunt object keys:`, Object.keys(hunts[0]));
-          console.log(`Sample hunt data:`, JSON.stringify(hunts[0]).substring(0, 300));
-        }
+        // Extract bonuses from each hunt session
+        huntSessions.forEach(session => {
+          if (!session.bonuses || !Array.isArray(session.bonuses)) return;
+          
+          const transformed = session.bonuses.map(bonus => ({
+            slot: bonus.slot?.title || bonus.name || 'Unknown',
+            bet: parseFloat(bonus.betSize) || 0,
+            win: parseFloat(bonus.payout) || 0,
+            multiplier: bonus.payout && bonus.betSize ? (bonus.payout / bonus.betSize).toFixed(2) : 0,
+            provider: bonus.slot?.provider || '',
+            date: new Date().toISOString()
+          }));
+          
+          // Only keep bonuses with actual bets
+          const valid = transformed.filter(t => t.bet > 0);
+          if (valid.length > 0) {
+            pageHunts += valid.length;
+            allHunts.push({
+              date: new Date().toISOString(),
+              bonuses: valid
+            });
+          }
+        });
         
-        // Transform mitchjones format to our format
-        const transformed = hunts.map(h => ({
-          slot: h.game?.name || h.slot?.name || h.slot || h.game || 'Unknown',
-          bet: parseFloat(h.bet) || 0,
-          win: parseFloat(h.payout || h.win || 0) || 0,
-          multiplier: parseFloat(h.multiplier) || 0,
-          provider: h.provider || h.game?.provider || '',
-          date: h.date || new Date().toISOString()
-        }));
-        
-        console.log(`Page ${page}: Transformed ${transformed.length}, first bet=${transformed[0]?.bet} win=${transformed[0]?.win}`);
-        
-        const filtered = transformed.filter(t => t.bet > 0 || t.win > 0);
-        console.log(`Page ${page}: After filter: ${filtered.length} hunts`);
-        
-        if (filtered.length > 0) {
-          allHunts.push({
-            date: new Date().toISOString(),
-            bonuses: filtered
-          });
-        }
+        console.log(`Page ${page}: Extracted ${pageHunts} valid bonuses`);
       } catch (pageErr) {
         if (pageErr.name === 'AbortError') {
           console.error(`Page ${page}: Fetch timeout`);
