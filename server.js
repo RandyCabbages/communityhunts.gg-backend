@@ -300,6 +300,177 @@ app.put('/api/hunts/:userId', requireAuth, (req, res) => {
 // ── Admin ──────────────────────────────────────────────────────────
 app.get('/api/admin/hunts', requireAdmin, (req, res) => res.json(getAllHunts()));
 
+// Mitch's hunt data storage
+let mitchHunts = [];
+
+// Fetch Mitch hunts from mitchjones.vip API (server-to-server, no CSP)
+app.post('/api/admin/fetch-and-import-mitch-hunts', requireAdmin, async (req, res) => {
+  try {
+    const allHunts = [];
+    
+    // Fetch all pages from mitchjones API
+    for (let page = 0; page < 20; page++) {
+      const response = await fetch(`https://mitchjones.vip/api/bonus-hunt/list?page=${page}`);
+      if (!response.ok) break;
+      
+      const data = await response.json();
+      if (!data.hunts || data.hunts.length === 0) break;
+      
+      // Transform mitchjones format to our format
+      const transformed = data.hunts.map(h => ({
+        slot: h.game?.name || h.game || h.slot || 'Unknown',
+        bet: h.bet,
+        win: h.payout,
+        multiplier: h.multiplier ? parseFloat(h.multiplier) : 0,
+        provider: h.provider || h.game?.provider || '',
+        date: h.date || new Date().toISOString()
+      }));
+      
+      allHunts.push({
+        date: new Date().toISOString(),
+        bonuses: transformed
+      });
+    }
+    
+    // Now import using the existing import logic
+    mitchHunts = allHunts;
+    
+    // Calculate aggregate slot stats
+    const stats = {};
+    
+    allHunts.forEach(hunt => {
+      if (!hunt.bonuses || !Array.isArray(hunt.bonuses)) return;
+      
+      hunt.bonuses.forEach(bonus => {
+        const slotName = bonus.slot || 'Unknown';
+        
+        if (!stats[slotName]) {
+          stats[slotName] = {
+            name: slotName,
+            totalBets: 0,
+            totalWins: 0,
+            bonusCount: 0,
+            wins: 0,
+            losses: 0,
+            totalWinnings: 0,
+            multipliers: []
+          };
+        }
+        
+        stats[slotName].bonusCount += 1;
+        stats[slotName].totalBets += bonus.bet || 0;
+        
+        if (bonus.win && bonus.win > 0) {
+          stats[slotName].wins += 1;
+          stats[slotName].totalWins += bonus.win;
+          stats[slotName].totalWinnings += (bonus.win - (bonus.bet || 0));
+          if (bonus.multiplier) stats[slotName].multipliers.push(bonus.multiplier);
+        } else {
+          stats[slotName].losses += 1;
+          stats[slotName].totalWinnings -= (bonus.bet || 0);
+        }
+      });
+    });
+    
+    // Calculate metrics
+    Object.values(stats).forEach(stat => {
+      stat.avgMultiplier = stat.multipliers.length > 0 
+        ? (stat.multipliers.reduce((a, b) => a + b, 0) / stat.multipliers.length).toFixed(2)
+        : 0;
+      stat.roi = stat.totalBets > 0 
+        ? ((stat.totalWinnings / stat.totalBets) * 100).toFixed(1)
+        : 0;
+      stat.winRate = stat.bonusCount > 0
+        ? ((stat.wins / stat.bonusCount) * 100).toFixed(1)
+        : 0;
+    });
+    
+    res.json({
+      ok: true,
+      huntsImported: allHunts.length,
+      totalBonuses: allHunts.reduce((sum, h) => sum + (h.bonuses?.length || 0), 0),
+      uniqueSlots: Object.keys(stats).length,
+      slotStats: stats
+    });
+  } catch (err) {
+    console.error('Error fetching Mitch hunts:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/admin/import-mitch-hunts', requireAdmin, (req, res) => {
+  const { hunts: incomingHunts } = req.body;
+  
+  if (!Array.isArray(incomingHunts)) {
+    return res.status(400).json({error: 'Invalid format. Expected {hunts: [...]}'});
+  }
+  
+  // Store the hunts
+  mitchHunts = incomingHunts;
+  
+  // Calculate aggregate slot stats
+  const stats = {};
+  
+  incomingHunts.forEach(hunt => {
+    if (!hunt.bonuses || !Array.isArray(hunt.bonuses)) return;
+    
+    hunt.bonuses.forEach(bonus => {
+      const slotName = bonus.slot || 'Unknown';
+      
+      if (!stats[slotName]) {
+        stats[slotName] = {
+          name: slotName,
+          totalBets: 0,
+          totalWins: 0,
+          bonusCount: 0,
+          wins: 0,
+          losses: 0,
+          totalWinnings: 0,
+          multipliers: []
+        };
+      }
+      
+      stats[slotName].bonusCount += 1;
+      stats[slotName].totalBets += bonus.bet || 0;
+      
+      if (bonus.win && bonus.win > 0) {
+        stats[slotName].wins += 1;
+        stats[slotName].totalWins += bonus.win;
+        stats[slotName].totalWinnings += (bonus.win - (bonus.bet || 0));
+        if (bonus.multiplier) stats[slotName].multipliers.push(bonus.multiplier);
+      } else {
+        stats[slotName].losses += 1;
+        stats[slotName].totalWinnings -= (bonus.bet || 0);
+      }
+    });
+  });
+  
+  // Calculate metrics
+  Object.values(stats).forEach(stat => {
+    stat.avgMultiplier = stat.multipliers.length > 0 
+      ? (stat.multipliers.reduce((a, b) => a + b, 0) / stat.multipliers.length).toFixed(2)
+      : 0;
+    stat.roi = stat.totalBets > 0 
+      ? ((stat.totalWinnings / stat.totalBets) * 100).toFixed(1)
+      : 0;
+    stat.winRate = stat.bonusCount > 0
+      ? ((stat.wins / stat.bonusCount) * 100).toFixed(1)
+      : 0;
+  });
+  
+  res.json({
+    ok: true,
+    huntsImported: incomingHunts.length,
+    totalBonuses: incomingHunts.reduce((sum, h) => sum + (h.bonuses?.length || 0), 0),
+    uniqueSlots: Object.keys(stats).length,
+    slotStats: stats
+  });
+});
+
+app.get('/api/admin/mitch-hunts', requireAdmin, (req, res) => {
+  res.json({hunts: mitchHunts, count: mitchHunts.length});
+});
+
 app.post('/api/admin/hunts/:userId/end', requireAdmin, (req, res) => {
   const h = hunts[req.params.userId];
   if (!h) return res.status(404).json({error:'Not found'});
