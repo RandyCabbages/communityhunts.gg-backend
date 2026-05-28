@@ -311,34 +311,40 @@ app.post('/api/admin/fetch-and-import-mitch-hunts', async (req, res) => {
     // Fetch all pages from mitchjones API
     for (let page = 0; page < 20; page++) {
       try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 5000);
+        
         const response = await fetch(`https://mitchjones.vip/api/bonus-hunt/list?page=${page}`, {
-          timeout: 10000
+          signal: controller.signal
         });
+        clearTimeout(timeoutId);
+        
         if (!response.ok) {
           console.log(`Page ${page}: Status ${response.status}, breaking`);
           break;
         }
         
         const data = await response.json();
-        console.log(`Page ${page}: Raw data keys:`, Object.keys(data));
-        console.log(`Page ${page}: data.hunts =`, Array.isArray(data.hunts) ? `${data.hunts.length} items` : typeof data.hunts);
         
-        if (!data.hunts || data.hunts.length === 0) {
-          console.log(`Page ${page}: No hunts, breaking`);
+        // Try different property names in case API structure varies
+        const hunts = data.hunts || data.data || data.results || [];
+        
+        if (!Array.isArray(hunts) || hunts.length === 0) {
+          console.log(`Page ${page}: No valid hunts array, breaking`);
           break;
         }
         
-        console.log(`Page ${page}: Got ${data.hunts.length} hunts`);
+        console.log(`Page ${page}: Got ${hunts.length} hunts`);
         
         // Transform mitchjones format to our format
-        const transformed = data.hunts.map(h => ({
+        const transformed = hunts.map(h => ({
           slot: h.game?.name || h.slot?.name || h.slot || h.game || 'Unknown',
           bet: parseFloat(h.bet) || 0,
           win: parseFloat(h.payout || h.win || 0) || 0,
           multiplier: parseFloat(h.multiplier) || 0,
           provider: h.provider || h.game?.provider || '',
           date: h.date || new Date().toISOString()
-        })).filter(t => t.bet > 0 || t.win > 0); // Only include if there's actual data
+        })).filter(t => t.bet > 0 || t.win > 0);
         
         if (transformed.length > 0) {
           allHunts.push({
@@ -347,7 +353,11 @@ app.post('/api/admin/fetch-and-import-mitch-hunts', async (req, res) => {
           });
         }
       } catch (pageErr) {
-        console.error(`Error fetching page ${page}:`, pageErr.message);
+        if (pageErr.name === 'AbortError') {
+          console.error(`Page ${page}: Fetch timeout`);
+        } else {
+          console.error(`Page ${page}: ${pageErr.message}`);
+        }
         break;
       }
     }
