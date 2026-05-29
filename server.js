@@ -311,8 +311,8 @@ app.post('/api/admin/fetch-and-import-mitch-hunts', async (req, res) => {
   try {
     const allHunts = [];
     
-    // Fetch all pages from mitchjones API (skip page 0 - current hunt with no payouts)
-    for (let page = 1; page < 20; page++) {
+    // Fetch all pages from mitchjones API (page 0 has completed hunts too)
+    for (let page = 0; page < 20; page++) {
       try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 5000);
