@@ -508,7 +508,7 @@ app.post('/api/admin/import-mitch-hunts', requireAdmin, (req, res) => {
   });
 });
 
-app.get('/api/admin/mitch-hunts', requireAdmin, (req, res) => {
+app.get('/api/admin/mitch-hunts', (req, res) => {
   res.json({hunts: mitchHunts, count: mitchHunts.length});
 });
 
