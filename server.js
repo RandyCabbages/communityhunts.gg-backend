@@ -303,6 +303,9 @@ app.get('/api/admin/hunts', requireAdmin, (req, res) => res.json(getAllHunts()))
 // Mitch's hunt data storage
 let mitchHunts = [];
 
+// Cdew's hunt data storage  
+let cdewHunts = [];
+
 // Fetch Mitch hunts from mitchjones.vip API (server-to-server, no CSP)
 app.post('/api/admin/fetch-and-import-mitch-hunts', async (req, res) => {
   try {
@@ -510,6 +513,44 @@ app.post('/api/admin/import-mitch-hunts', requireAdmin, (req, res) => {
 
 app.get('/api/admin/mitch-hunts', (req, res) => {
   res.json({hunts: mitchHunts, count: mitchHunts.length});
+});
+
+app.post('/api/admin/fetch-and-import-cdew-hunts', async (req, res) => {
+  try {
+    const response = await fetch('https://api.cdew.gg/api/bonus-hunts');
+    const data = await response.json();
+    
+    if (!data.success) return res.status(400).json({error: 'Failed to fetch Cdew data'});
+    
+    const allHunts = [];
+    const huntsToProcess = [];
+    if (data.active && data.active.bonuses) huntsToProcess.push(data.active);
+    if (Array.isArray(data.history)) huntsToProcess.push(...data.history);
+    
+    huntsToProcess.forEach(hunt => {
+      if (!hunt.bonuses || !Array.isArray(hunt.bonuses)) return;
+      const transformed = hunt.bonuses.map(bonus => ({
+        slot: bonus.slot?.title || bonus.name || 'Unknown',
+        bet: parseFloat(bonus.betSize) || 0,
+        win: parseFloat(bonus.payout) || 0,
+        multiplier: bonus.betSize ? ((bonus.payout || 0) / bonus.betSize).toFixed(2) : 0,
+        provider: bonus.slot?.provider || '',
+        date: new Date().toISOString()
+      }));
+      const valid = transformed.filter(t => t.bet > 0);
+      if (valid.length > 0) allHunts.push({date: new Date().toISOString(), bonuses: valid});
+    });
+    
+    cdewHunts = allHunts;
+    res.json({ok: true, huntsImported: allHunts.length, totalBonuses: allHunts.reduce((sum, h) => sum + (h.bonuses?.length || 0), 0)});
+  } catch (err) {
+    console.error('Error fetching Cdew hunts:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/admin/cdew-hunts', (req, res) => {
+  res.json({hunts: cdewHunts, count: cdewHunts.length});
 });
 
 app.post('/api/admin/hunts/:userId/end', requireAdmin, (req, res) => {
