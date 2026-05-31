@@ -535,7 +535,6 @@ getSlotGames().catch(() => {});
 app.get('/api/slots/search', async (req, res) => {
   const q = (req.query.q || '').toLowerCase().trim();
   if (!q || q.length < 2) return res.json([]);
-  const names = await getSlotNames();
   const games = await getSlotGames();
   const results = games
     .filter(g => g.name.toLowerCase().includes(q))
