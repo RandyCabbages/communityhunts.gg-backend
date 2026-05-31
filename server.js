@@ -14,26 +14,9 @@ const io     = new Server(server, {
 
 const PORT           = process.env.PORT || 3001;
 const FRONTEND_URL   = process.env.FRONTEND_URL || 'http://localhost:3000';
-
-// Allow both FRONTEND_URL and common Vercel domains
-const corsOrigin = (origin, callback) => {
-  const allowedOrigins = [
-    FRONTEND_URL,
-    'https://twitchbean-hunt.vercel.app',
-    'http://localhost:3000',
-    'http://localhost:3001',
-  ];
-  if (!origin || allowedOrigins.includes(origin)) {
-    callback(null, true);
-  } else {
-    callback(new Error('Not allowed by CORS'));
-  }
-};
-
-app.use(cors({ origin: corsOrigin, credentials: true }));
 const SESSION_SECRET = process.env.SESSION_SECRET || 'beanhunt-secret';
-const ADMINS         = (process.env.ADMINS || 'bean,randycabbage,randy cabbage,mcflury,mihallimou,missingiscool,cuda,birdvision').toLowerCase().split(',').map(s=>s.trim());
-const VIP_HOSTS      = (process.env.VIP_HOSTS || 'bean,mcflury,mihallimou,missingiscool,cuda,randycabbage').toLowerCase().split(',').map(s=>s.trim());
+const ADMINS         = (process.env.ADMINS || 'bean,randycabbage,randy cabbage,mcflurry,mihallimou,missingiscool,cuda').toLowerCase().split(',').map(s=>s.trim());
+const VIP_HOSTS      = (process.env.VIP_HOSTS || 'bean,mcflurry,mihallimou,missingiscool,cuda,randycabbage').toLowerCase().split(',').map(s=>s.trim());
 
 function nameOf(user) { return (user?.displayName || user?.username || '').toLowerCase().trim(); }
 function isAdmin(user) { return user ? ADMINS.includes(nameOf(user)) : false; }
@@ -68,6 +51,7 @@ function isEquityMember(user, huntOwnerId) {
 
 // ── Middleware ─────────────────────────────────────────────────────
 app.set('trust proxy', 1);
+app.use(cors({ origin: FRONTEND_URL, credentials: true }));
 app.use(express.json());
 app.use(session({
   secret: SESSION_SECRET, resave: false, saveUninitialized: false,
@@ -119,7 +103,26 @@ app.get('/auth/me', (req, res) => {
 });
 
 // ── State ──────────────────────────────────────────────────────────
-const hunts   = {};
+const fs   = require('fs');
+const path = require('path');
+const HUNTS_FILE = path.join(__dirname, 'hunts_data.json');
+
+function loadHunts() {
+  try {
+    if (fs.existsSync(HUNTS_FILE)) {
+      const raw = fs.readFileSync(HUNTS_FILE, 'utf8');
+      return JSON.parse(raw);
+    }
+  } catch(e) { console.error('Failed to load hunts:', e); }
+  return {};
+}
+
+function saveHunts() {
+  try { fs.writeFileSync(HUNTS_FILE, JSON.stringify(hunts, null, 2)); }
+  catch(e) { console.error('Failed to save hunts:', e); }
+}
+
+const hunts   = loadHunts();
 const viewers = {};
 let beanLive  = { isLive: false, title: '', updatedAt: null };
 
@@ -185,6 +188,7 @@ app.post('/api/my-hunt/start', requireAuth, (req, res) => {
     user: req.user, isLive: false, startedAt: null, archivedAt: null,
     huntType, bonuses: [], equity: huntType==='vip'?[{id:'bean_auto',name:'Bean',amount:1000,isRollWinner:false}]:[], calls: [], invitedEditors: [], callLimit: 0, huntMode: 'creating'
   };
+  saveHunts();
   res.json({ok:true});
 });
 
@@ -193,6 +197,7 @@ app.post('/api/my-hunt/golive', requireAuth, (req, res) => {
   hunts[req.user.id].isLive    = true;
   hunts[req.user.id].startedAt = new Date().toISOString();
   hunts[req.user.id].archivedAt= null;
+  saveHunts();
   emitHubUpdate();
   io.to(`hunt:${req.user.id}`).emit('hunt:update', hunts[req.user.id]);
   res.json({ok:true});
@@ -202,6 +207,7 @@ app.post('/api/my-hunt/end', requireAuth, (req, res) => {
   if (hunts[req.user.id]) {
     hunts[req.user.id].isLive    = false;
     hunts[req.user.id].archivedAt= new Date().toISOString();
+    saveHunts();
     emitHubUpdate();
     io.to(`hunt:${req.user.id}`).emit('hunt:update', hunts[req.user.id]);
   }
@@ -211,6 +217,7 @@ app.post('/api/my-hunt/end', requireAuth, (req, res) => {
 app.post('/api/my-hunt/reset', requireAuth, (req, res) => {
   hunts[req.user.id] = { user: req.user, isLive: false, startedAt: null, archivedAt: null,
     huntType: 'community', bonuses: [], equity: [], calls: [], invitedEditors: [], callLimit: 0, huntMode: 'creating' };
+  saveHunts();
   emitHubUpdate();
   res.json({ok:true});
 });
@@ -231,6 +238,7 @@ app.put('/api/my-hunt', requireAuth, (req, res) => {
   }
   if (callLimit !== undefined) hunts[req.user.id].callLimit = callLimit;
   if (huntMode  !== undefined) hunts[req.user.id].huntMode  = huntMode;
+  saveHunts();
   io.to(`hunt:${req.user.id}`).emit('hunt:update', hunts[req.user.id]);
   emitHubUpdate();
   res.json({ok:true});
@@ -245,6 +253,7 @@ app.post('/api/my-hunt/invite', requireAuth, (req, res) => {
   if (!hunts[req.user.id].invitedEditors) hunts[req.user.id].invitedEditors = [];
   if (!hunts[req.user.id].invitedEditors.includes(lower))
     hunts[req.user.id].invitedEditors.push(lower);
+  saveHunts();
   // Tell everyone watching this hunt to re-fetch their permissions
   io.to(`hunt:${req.user.id}`).emit('hunt:reinvite', { huntUserId: req.user.id });
   res.json({ok:true, invitedEditors: hunts[req.user.id].invitedEditors});
@@ -255,6 +264,7 @@ app.delete('/api/my-hunt/invite', requireAuth, (req, res) => {
   if (!hunts[req.user.id]) return res.status(404).json({error:'No hunt'});
   hunts[req.user.id].invitedEditors = (hunts[req.user.id].invitedEditors||[])
     .filter(u => u !== username.toLowerCase().trim());
+  saveHunts();
   io.to(`hunt:${req.user.id}`).emit('hunt:reinvite', { huntUserId: req.user.id });
   res.json({ok:true, invitedEditors: hunts[req.user.id].invitedEditors});
 });
@@ -315,294 +325,6 @@ app.put('/api/hunts/:userId', requireAuth, (req, res) => {
 
 // ── Admin ──────────────────────────────────────────────────────────
 app.get('/api/admin/hunts', requireAdmin, (req, res) => res.json(getAllHunts()));
-
-// Mitch's hunt data storage
-let mitchHunts = [];
-
-// Cdew's hunt data storage  
-let cdewHunts = [];
-
-// Fetch Mitch hunts from mitchjones.vip API (server-to-server, no CSP)
-app.post('/api/admin/fetch-and-import-mitch-hunts', async (req, res) => {
-  try {
-    const allHunts = [];
-    
-    // Fetch all pages from mitchjones API (page 0 has completed hunts too)
-    for (let page = 0; page < 20; page++) {
-      try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 5000);
-        
-        const response = await fetch(`https://mitchjones.vip/api/bonus-hunt/list?page=${page}`, {
-          signal: controller.signal
-        });
-        clearTimeout(timeoutId);
-        
-        if (!response.ok) {
-          console.log(`Page ${page}: Status ${response.status}, breaking`);
-          break;
-        }
-        
-        const data = await response.json();
-        
-        // API returns { data: [{ name, bonuses: [...] }, ...] }
-        const huntSessions = data.data || [];
-        
-        if (!Array.isArray(huntSessions) || huntSessions.length === 0) {
-          console.log(`Page ${page}: No hunt sessions, breaking`);
-          break;
-        }
-        
-        let pageHunts = 0;
-        
-        // Extract bonuses from each hunt session
-        huntSessions.forEach(session => {
-          if (!session.bonuses || !Array.isArray(session.bonuses)) return;
-          
-          // Extract hunt starting amount (the buyin for the entire hunt session)
-          // Round to nearest 1000 - Mitch always starts with round amounts
-          const huntStartAmount = Math.round(parseFloat(session.infoStartCost) / 1000) * 1000 || 0;
-          
-          const transformed = session.bonuses.map(bonus => ({
-            slot: bonus.slot?.title || bonus.name || 'Unknown',
-            bet: parseFloat(bonus.betSize) || 0,
-            win: parseFloat(bonus.payout) || 0,
-            requiredMultiplier: parseFloat(bonus.multiplier) || 0,  // Target multiplier from API
-            multiplier: bonus.payout && bonus.betSize ? parseFloat((bonus.payout / bonus.betSize).toFixed(2)) : 0,  // Earned multiplier
-            provider: bonus.slot?.provider || '',
-            date: new Date().toISOString()
-          }));
-          
-          // Only keep bonuses with actual bets
-          const valid = transformed.filter(t => t.bet > 0);
-          if (valid.length > 0) {
-            pageHunts += valid.length;
-            allHunts.push({
-              date: new Date().toISOString(),
-              huntStart: huntStartAmount,  // Store the hunt's starting amount (buyin)
-              bonuses: valid
-            });
-          }
-        });
-        
-        console.log(`Page ${page}: Extracted ${pageHunts} valid bonuses`);
-      } catch (pageErr) {
-        if (pageErr.name === 'AbortError') {
-          console.error(`Page ${page}: Fetch timeout`);
-        } else {
-          console.error(`Page ${page}: ${pageErr.message}`);
-        }
-        break;
-      }
-    }
-    
-    console.log(`Total hunts fetched: ${allHunts.length}`);
-    
-    // Now import using the existing import logic
-    mitchHunts = allHunts;
-    
-    // Calculate aggregate slot stats
-    const stats = {};
-    
-    allHunts.forEach(hunt => {
-      if (!hunt.bonuses || !Array.isArray(hunt.bonuses)) return;
-      
-      hunt.bonuses.forEach(bonus => {
-        const slotName = bonus.slot || 'Unknown';
-        
-        if (!stats[slotName]) {
-          stats[slotName] = {
-            name: slotName,
-            totalBets: 0,
-            totalWins: 0,
-            bonusCount: 0,
-            wins: 0,
-            losses: 0,
-            totalWinnings: 0,
-            multipliers: []
-          };
-        }
-        
-        stats[slotName].bonusCount += 1;
-        stats[slotName].totalBets += bonus.bet || 0;
-        
-        if (bonus.win && bonus.win > 0) {
-          stats[slotName].wins += 1;
-          stats[slotName].totalWins += bonus.win;
-          stats[slotName].totalWinnings += (bonus.win - (bonus.bet || 0));
-          if (bonus.multiplier) stats[slotName].multipliers.push(bonus.multiplier);
-        } else {
-          stats[slotName].losses += 1;
-          stats[slotName].totalWinnings -= (bonus.bet || 0);
-        }
-      });
-    });
-    
-    // Calculate metrics
-    Object.values(stats).forEach(stat => {
-      stat.avgMultiplier = stat.multipliers.length > 0 
-        ? (stat.multipliers.reduce((a, b) => a + b, 0) / stat.multipliers.length).toFixed(2)
-        : 0;
-      stat.roi = stat.totalBets > 0 
-        ? ((stat.totalWinnings / stat.totalBets) * 100).toFixed(1)
-        : 0;
-      stat.winRate = stat.bonusCount > 0
-        ? ((stat.wins / stat.bonusCount) * 100).toFixed(1)
-        : 0;
-    });
-    
-    res.json({
-      ok: true,
-      huntsImported: allHunts.length,
-      totalBonuses: allHunts.reduce((sum, h) => sum + (h.bonuses?.length || 0), 0),
-      uniqueSlots: Object.keys(stats).length,
-      slotStats: stats
-    });
-  } catch (err) {
-    console.error('Error fetching Mitch hunts:', err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post('/api/admin/import-mitch-hunts', requireAdmin, (req, res) => {
-  const { hunts: incomingHunts } = req.body;
-  
-  if (!Array.isArray(incomingHunts)) {
-    return res.status(400).json({error: 'Invalid format. Expected {hunts: [...]}'});
-  }
-  
-  // Store the hunts
-  mitchHunts = incomingHunts;
-  
-  // Calculate aggregate slot stats
-  const stats = {};
-  
-  incomingHunts.forEach(hunt => {
-    if (!hunt.bonuses || !Array.isArray(hunt.bonuses)) return;
-    
-    hunt.bonuses.forEach(bonus => {
-      const slotName = bonus.slot || 'Unknown';
-      
-      if (!stats[slotName]) {
-        stats[slotName] = {
-          name: slotName,
-          totalBets: 0,
-          totalWins: 0,
-          bonusCount: 0,
-          wins: 0,
-          losses: 0,
-          totalWinnings: 0,
-          multipliers: []
-        };
-      }
-      
-      stats[slotName].bonusCount += 1;
-      stats[slotName].totalBets += bonus.bet || 0;
-      
-      if (bonus.win && bonus.win > 0) {
-        stats[slotName].wins += 1;
-        stats[slotName].totalWins += bonus.win;
-        stats[slotName].totalWinnings += (bonus.win - (bonus.bet || 0));
-        if (bonus.multiplier) stats[slotName].multipliers.push(bonus.multiplier);
-      } else {
-        stats[slotName].losses += 1;
-        stats[slotName].totalWinnings -= (bonus.bet || 0);
-      }
-    });
-  });
-  
-  // Calculate metrics
-  Object.values(stats).forEach(stat => {
-    stat.avgMultiplier = stat.multipliers.length > 0 
-      ? (stat.multipliers.reduce((a, b) => a + b, 0) / stat.multipliers.length).toFixed(2)
-      : 0;
-    stat.roi = stat.totalBets > 0 
-      ? ((stat.totalWinnings / stat.totalBets) * 100).toFixed(1)
-      : 0;
-    stat.winRate = stat.bonusCount > 0
-      ? ((stat.wins / stat.bonusCount) * 100).toFixed(1)
-      : 0;
-  });
-  
-  res.json({
-    ok: true,
-    huntsImported: incomingHunts.length,
-    totalBonuses: incomingHunts.reduce((sum, h) => sum + (h.bonuses?.length || 0), 0),
-    uniqueSlots: Object.keys(stats).length,
-    slotStats: stats
-  });
-});
-
-app.get('/api/admin/mitch-hunts', (req, res) => {
-  res.json({hunts: mitchHunts, count: mitchHunts.length});
-});
-
-app.post('/api/admin/fetch-and-import-cdew-hunts', async (req, res) => {
-  try {
-    const response = await fetch('https://api.cdew.gg/api/bonus-hunts');
-    const data = await response.json();
-    
-    if (!data.success) return res.status(400).json({error: 'Failed to fetch Cdew data'});
-    
-    const allHunts = [];
-    const huntsToProcess = [];
-    if (data.active && data.active.bonuses) huntsToProcess.push(data.active);
-    if (Array.isArray(data.history)) huntsToProcess.push(...data.history);
-    
-    huntsToProcess.forEach(hunt => {
-      if (!hunt.bonuses || !Array.isArray(hunt.bonuses)) return;
-      const transformed = hunt.bonuses.map(bonus => ({
-        slot: bonus.slot?.title || bonus.name || 'Unknown',
-        bet: parseFloat(bonus.betSize) || 0,
-        win: parseFloat(bonus.payout) || 0,
-        multiplier: bonus.betSize ? ((bonus.payout || 0) / bonus.betSize).toFixed(2) : 0,
-        provider: bonus.slot?.provider || '',
-        date: new Date().toISOString()
-      }));
-      const valid = transformed.filter(t => t.bet > 0);
-      if (valid.length > 0) allHunts.push({date: new Date().toISOString(), bonuses: valid});
-    });
-    
-    cdewHunts = allHunts;
-    res.json({ok: true, huntsImported: allHunts.length, totalBonuses: allHunts.reduce((sum, h) => sum + (h.bonuses?.length || 0), 0)});
-  } catch (err) {
-    console.error('Error fetching Cdew hunts:', err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get('/api/admin/cdew-hunts', (req, res) => {
-  res.json({hunts: cdewHunts, count: cdewHunts.length});
-});
-
-app.get('/api/autocomplete/users', (req, res) => {
-  const allUsers = new Set();
-  // Collect from all hunt equity members
-  Object.values(hunts).forEach(hunt => {
-    if (hunt.equity && Array.isArray(hunt.equity)) {
-      hunt.equity.forEach(e => {
-        if (e.name) allUsers.add(e.name);
-      });
-    }
-  });
-  // Add active users
-  activeUsers.forEach(userData => {
-    if (userData.user?.displayName) allUsers.add(userData.user.displayName);
-    if (userData.user?.username) allUsers.add(userData.user.username);
-  });
-  res.json({ users: Array.from(allUsers).sort() });
-});
-
-app.get('/api/admin/active-users', requireAdmin, (req, res) => {
-  const users = Array.from(activeUsers.values()).map(userData => ({
-    username: userData.user?.displayName || userData.user?.username || 'Unknown',
-    avatar: userData.user?.avatar || null,
-    lastActive: userData.lastActive,
-    currentPage: userData.currentPage,
-    socketCount: userData.socketCount
-  }));
-  res.json({ users, count: users.length });
-});
 
 app.post('/api/admin/hunts/:userId/end', requireAdmin, (req, res) => {
   const h = hunts[req.params.userId];
@@ -731,15 +453,11 @@ app.get('/api/discord/import-calls', requireAuth, async (req, res) => {
       if (!content) continue;
 
       // Split by comma or newline — each part is a slot call
-      const parts = content.split(/[,\n]/).map(p => p.trim()).filter(p => p.length > 2 && p.length < 80);
+      const parts = content.split(/[,\n]/).map(p => p.trim()).filter(p => p.length > 1 && p.length < 80);
 
       for (const part of parts) {
         const slotName = part.replace(/^[#\-•*\d.]+\s*/, '').trim();
-        // Only import if: slot is at least 5 chars OR contains multiple words OR contains slot keywords
-        const hasMultipleWords = /\s/.test(slotName);
-        const hasSlotKeyword = /bonus|bonanza|gold|megaways|wild|dead|princess|leopard|leopards|fire|beach|xmas|100x|1000|gates|gates|sweet|starlight|fruit|dog|house|bass|big|fishin|power|great|rhino|buffalo|king|lion|lions|eye|aztec|floating|dragon|book|legacy|rise|doom|wanted|deadwood|rich|amulet|hold|spinner|halloween|christmas|crash|crash|xmas|100|splash|xtreme|bash|races/i.test(slotName);
-        
-        if (slotName && (slotName.length >= 5 || hasMultipleWords || hasSlotKeyword) && !existingSlots.has(slotName.toLowerCase())) {
+        if (slotName && !existingSlots.has(slotName.toLowerCase())) {
           imported.push({
             id: `dc_${msg.id}_${imported.length}`,
             slot: slotName,
@@ -816,7 +534,8 @@ getSlotGames().catch(() => {});
 
 app.get('/api/slots/search', async (req, res) => {
   const q = (req.query.q || '').toLowerCase().trim();
-  if (!q || q.length < 1) return res.json([]);
+  if (!q || q.length < 2) return res.json([]);
+  const names = await getSlotNames();
   const games = await getSlotGames();
   const results = games
     .filter(g => g.name.toLowerCase().includes(q))
@@ -828,14 +547,13 @@ app.get('/api/slots/search', async (req, res) => {
       return a.name.localeCompare(b.name);
     })
     .slice(0, 20)
-    .map(g => g.name);
+    .map(g => ({
+      name: g.name,
+      slug: g.slug,
+      provider: g.provider_slug || g.provider?.toLowerCase().replace(/[^a-z0-9]/g,'') || '',
+      thumb: `https://usercontent.cc/images/games/${g.provider_slug || ''}/${g.slug}.webp`
+    }));
   res.json(results);
-});
-
-app.get('/api/slots', async (req, res) => {
-  const games = await getSlotGames();
-  const slotNames = games.map(g => g.name).sort();
-  res.json(slotNames);
 });
 
 app.get('/api/health', (req, res) => res.json({ok:true}));
@@ -909,11 +627,8 @@ app.post('/api/hunts/:userId/call-requests/:requestId', requireAuth, (req, res) 
 // ── Socket.io ─────────────────────────────────────────────────────
 // Track socket → { watchingHuntId, user } for permission-aware updates
 const socketUsers = {};
-const activeUsers = new Map(); // userId → { user, lastActive, currentPage, socketCount }
 
 io.on('connection', socket => {
-  socketUsers[socket.id] = {};
-  
   socket.on('watch:hub', () => {
     socket.join('hub');
     socket.emit('hub:update', getPublicHunts());
@@ -922,46 +637,21 @@ io.on('connection', socket => {
 
   socket.on('watch:hunt', userId => {
     socket.join(`hunt:${userId}`);
-    socketUsers[socket.id].watchingHuntId = userId;
-    socketUsers[socket.id].currentPage = 'hunt';
+    socketUsers[socket.id] = { watchingHuntId: userId };
     viewers[userId] = (viewers[userId]||0) + 1;
     const h = hunts[userId];
     if (h) socket.emit('hunt:update', h);
     emitHubUpdate();
+    socket.on('disconnect', () => {
+      viewers[userId] = Math.max(0,(viewers[userId]||1)-1);
+      delete socketUsers[socket.id];
+      emitHubUpdate();
+    });
   });
 
   // Client sends their user id so we can compute canEdit for them
-  socket.on('identify', (userId, user) => {
-    socketUsers[socket.id].userId = userId;
-    socketUsers[socket.id].user = user;
-    
-    // Track active user
-    const userData = activeUsers.get(userId) || { user, socketCount: 0 };
-    userData.lastActive = new Date();
-    userData.socketCount = (userData.socketCount || 0) + 1;
-    userData.currentPage = socketUsers[socket.id].currentPage || 'hub';
-    activeUsers.set(userId, userData);
-  });
-
-  // Register disconnect handler ONCE per socket connection
-  socket.on('disconnect', () => {
-    const watchingUserId = socketUsers[socket.id]?.watchingHuntId;
-    const userId = socketUsers[socket.id]?.userId;
-    
-    if (watchingUserId) {
-      viewers[watchingUserId] = Math.max(0, (viewers[watchingUserId]||1) - 1);
-      emitHubUpdate();
-    }
-    
-    if (userId && activeUsers.has(userId)) {
-      const existing = activeUsers.get(userId);
-      existing.socketCount = Math.max(0, (existing.socketCount || 1) - 1);
-      if (existing.socketCount === 0) {
-        activeUsers.delete(userId);
-      }
-    }
-    
-    delete socketUsers[socket.id];
+  socket.on('identify', (userId) => {
+    if (socketUsers[socket.id]) socketUsers[socket.id].userId = userId;
   });
 
   // On reinvite, socket re-fetches permissions from the API
