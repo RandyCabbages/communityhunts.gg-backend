@@ -5,6 +5,8 @@ const DiscordStrategy = require('passport-discord').Strategy;
 const cors            = require('cors');
 const http            = require('http');
 const { Server }      = require('socket.io');
+const fs              = require('fs');
+const path            = require('path');
 
 const app    = express();
 const server = http.createServer(app);
@@ -103,8 +105,6 @@ app.get('/auth/me', (req, res) => {
 });
 
 // ── State ──────────────────────────────────────────────────────────
-const fs   = require('fs');
-const path = require('path');
 const HUNTS_FILE = path.join(__dirname, 'hunts_data.json');
 
 function loadHunts() {
