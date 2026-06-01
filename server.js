@@ -510,7 +510,33 @@ app.get('/api/discord/parse-winners', requireAuth, async (req, res) => {
 
 
 // ── Slot Autocomplete ─────────────────────────────────────────────
+const SLOTS_FILE = path.join(__dirname, 'slots_cache.json');
 let slotCache = { games: [], fetchedAt: 0 };
+let validatedGames = []; // only games confirmed to have a working thumbnail
+let thumbValidationDone = false;
+const ONE_DAY = 24 * 60 * 60 * 1000;
+
+function loadSlotsCache() {
+  try {
+    if (fs.existsSync(SLOTS_FILE)) {
+      const data = JSON.parse(fs.readFileSync(SLOTS_FILE, 'utf8'));
+      if (data.validatedAt && Date.now() - data.validatedAt < ONE_DAY && Array.isArray(data.games) && data.games.length > 0) {
+        validatedGames = data.games;
+        thumbValidationDone = true;
+        console.log(`[slots] Loaded ${validatedGames.length} validated slots from cache (${Math.round((Date.now()-data.validatedAt)/3600000)}h old)`);
+        return true; // cache is fresh, no need to re-validate
+      }
+    }
+  } catch(e) { console.error('[slots] Failed to load slots cache:', e.message); }
+  return false; // cache missing or stale
+}
+
+function saveSlotsCache() {
+  try {
+    fs.writeFileSync(SLOTS_FILE, JSON.stringify({ validatedAt: Date.now(), games: validatedGames }, null, 2));
+    console.log(`[slots] Saved ${validatedGames.length} slots to cache`);
+  } catch(e) { console.error('[slots] Failed to save slots cache:', e.message); }
+}
 
 async function getSlotGames() {
   const ONE_HOUR = 60 * 60 * 1000;
@@ -522,20 +548,60 @@ async function getSlotGames() {
     const data = await res.json();
     slotCache.games = (data.results || []).filter(s => s.name);
     slotCache.fetchedAt = Date.now();
-    console.log(`[slots] Cached ${slotCache.games.length} slots`);
+    console.log(`[slots] Fetched ${slotCache.games.length} slots from slot.report`);
   } catch(e) {
     console.error('[slots] Failed to fetch slot list:', e.message);
   }
   return slotCache.games;
 }
 
-// Pre-fetch on startup
-getSlotGames().catch(() => {});
+async function validateAllThumbs() {
+  const games = await getSlotGames();
+  console.log(`[slots] Validating thumbnails for ${games.length} slots...`);
+  const BATCH = 50;
+  const results = [];
+  for (let i = 0; i < games.length; i += BATCH) {
+    const batch = games.slice(i, i + BATCH);
+    const checked = await Promise.all(batch.map(async g => {
+      try {
+        const r = await fetch(`https://slot.report/images/slots/${g.slug}-thumb.webp`, { method: 'HEAD' });
+        return r.ok ? g : null;
+      } catch { return null; }
+    }));
+    results.push(...checked.filter(Boolean));
+    if (i % 1000 === 0 && i > 0) console.log(`[slots] Validated ${i}/${games.length}...`);
+  }
+  validatedGames = results;
+  thumbValidationDone = true;
+  saveSlotsCache();
+  console.log(`[slots] Done — ${validatedGames.length}/${games.length} slots have valid thumbnails`);
+}
+
+// On startup: load from cache if fresh, otherwise re-validate in background
+const cacheLoaded = loadSlotsCache();
+if (!cacheLoaded) {
+  // Run full validation in background — autocomplete works with unvalidated list in the meantime
+  getSlotGames().then(() => validateAllThumbs()).catch(() => {});
+} else {
+  // Cache is fresh, but still check once a day for new slots in the background
+  setTimeout(() => {
+    getSlotGames().then(() => validateAllThumbs()).catch(() => {});
+  }, ONE_DAY);
+}
+
+// Also schedule daily refresh
+setInterval(() => {
+  console.log('[slots] Daily refresh — re-validating thumbnails...');
+  getSlotGames().then(() => validateAllThumbs()).catch(() => {});
+}, ONE_DAY);
 
 app.get('/api/slots/search', async (req, res) => {
   const q = (req.query.q || '').toLowerCase().trim();
   if (!q || q.length < 2) return res.json([]);
-  const games = await getSlotGames();
+
+  // Use validated list if ready, otherwise fall back to full list
+  const games = thumbValidationDone ? validatedGames : await getSlotGames();
+
   const results = games
     .filter(g => g.name.toLowerCase().includes(q))
     .sort((a, b) => {
@@ -552,6 +618,7 @@ app.get('/api/slots/search', async (req, res) => {
       provider: g.provider_slug || g.provider?.toLowerCase().replace(/[^a-z0-9]/g,'') || '',
       thumb: `https://slot.report/images/slots/${g.slug}-thumb.webp`
     }));
+
   res.json(results);
 });
 
