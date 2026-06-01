@@ -550,7 +550,7 @@ app.get('/api/slots/search', async (req, res) => {
       name: g.name,
       slug: g.slug,
       provider: g.provider_slug || g.provider?.toLowerCase().replace(/[^a-z0-9]/g,'') || '',
-      thumb: `https://usercontent.cc/images/games/${g.provider_slug || ''}/${g.slug}.webp`
+      thumb: `https://slot.report/images/slots/${g.slug}-thumb.webp`
     }));
   res.json(results);
 });
