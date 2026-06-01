@@ -516,7 +516,7 @@ let validatedGames = []; // only games confirmed to have a working thumbnail
 let thumbValidationDone = false;
 const ONE_DAY = 24 * 60 * 60 * 1000;
 
-const SLOTS_CACHE_VERSION = 2; // bump to force re-validation
+const SLOTS_CACHE_VERSION = 3; // bump to force re-validation
 
 function loadSlotsCache() {
   try {
@@ -575,16 +575,17 @@ async function validateAllThumbs() {
     const checked = await Promise.all(batch.map(async g => {
       try {
         const r = await fetch(`https://slot.report/images/slots/${g.slug}-thumb.webp`, { method: 'HEAD' });
-        return r.ok ? g : null;
-      } catch { return null; }
+        return { ...g, hasThumb: r.ok };
+      } catch { return { ...g, hasThumb: false }; }
     }));
-    results.push(...checked.filter(Boolean));
+    results.push(...checked);
     if (i % 1000 === 0 && i > 0) console.log(`[slots] Validated ${i}/${games.length}...`);
   }
   validatedGames = results;
   thumbValidationDone = true;
+  const withThumb = results.filter(g => g.hasThumb).length;
   saveSlotsCache();
-  console.log(`[slots] Done — ${validatedGames.length}/${games.length} slots have valid thumbnails`);
+  console.log(`[slots] Done — ${withThumb}/${games.length} slots have thumbnails, ${games.length - withThumb} without`);
 }
 
 // On startup: load from cache if fresh, otherwise re-validate in background
@@ -626,7 +627,7 @@ app.get('/api/slots/search', async (req, res) => {
       name: g.name,
       slug: g.slug,
       provider: g.provider_slug || g.provider?.toLowerCase().replace(/[^a-z0-9]/g,'') || '',
-      thumb: `https://slot.report/images/slots/${g.slug}-thumb.webp`
+      thumb: (thumbValidationDone ? g.hasThumb : true) ? `https://slot.report/images/slots/${g.slug}-thumb.webp` : null
     }));
 
   res.json(results);
