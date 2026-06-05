@@ -157,6 +157,7 @@ function emitHuntUpdate(userId) { const h = hunts[userId]; if (h) { persistHunts
 
 function requireAuth(req, res, next)  { if (!req.user) return res.status(401).json({error:'Not authenticated'}); next(); }
 function requireAdmin(req, res, next) { if (!req.user||!isAdmin(req.user)) return res.status(403).json({error:'Admin only'}); next(); }
+function uid() { return Math.random().toString(36).slice(2, 8); }
 
 // ── Public hunt endpoints ──────────────────────────────────────────
 app.get('/api/hunts', (req, res) => res.json(getPublicHunts()));
@@ -201,6 +202,7 @@ app.post('/api/my-hunt/start', requireAuth, (req, res) => {
     user: req.user, isLive: false, startedAt: null, archivedAt: null,
     huntType, bonuses: [], equity: huntType==='vip'?[{id:'bean_auto',name:'Bean',amount:1000,isRollWinner:false}]:[], calls: [], invitedEditors: [], callLimit: 0, huntMode: 'creating'
   };
+  persistHunts();
   res.json({ok:true});
 });
 
@@ -209,7 +211,7 @@ app.post('/api/my-hunt/golive', requireAuth, (req, res) => {
   hunts[req.user.id].isLive    = true;
   hunts[req.user.id].startedAt = new Date().toISOString();
   hunts[req.user.id].archivedAt= null;
-  emitHubUpdate();
+  emitHubUpdate(); // emitHubUpdate calls persistHunts
   io.to(`hunt:${req.user.id}`).emit('hunt:update', hunts[req.user.id]);
   res.json({ok:true});
 });
@@ -218,7 +220,7 @@ app.post('/api/my-hunt/end', requireAuth, (req, res) => {
   if (hunts[req.user.id]) {
     hunts[req.user.id].isLive    = false;
     hunts[req.user.id].archivedAt= new Date().toISOString();
-    emitHubUpdate();
+    emitHubUpdate(); // emitHubUpdate calls persistHunts
     io.to(`hunt:${req.user.id}`).emit('hunt:update', hunts[req.user.id]);
   }
   res.json({ok:true});
@@ -227,6 +229,7 @@ app.post('/api/my-hunt/end', requireAuth, (req, res) => {
 app.post('/api/my-hunt/reset', requireAuth, (req, res) => {
   hunts[req.user.id] = { user: req.user, isLive: false, startedAt: null, archivedAt: null,
     huntType: 'community', bonuses: [], equity: [], calls: [], invitedEditors: [], callLimit: 0, huntMode: 'creating' };
+  persistHunts();
   emitHubUpdate();
   res.json({ok:true});
 });
@@ -248,6 +251,7 @@ app.put('/api/my-hunt', requireAuth, (req, res) => {
   if (callLimit  !== undefined) hunts[req.user.id].callLimit  = callLimit;
   if (huntMode   !== undefined) hunts[req.user.id].huntMode   = huntMode;
   if (roundRobin !== undefined) hunts[req.user.id].roundRobin = roundRobin;
+  persistHunts();
   io.to(`hunt:${req.user.id}`).emit('hunt:update', hunts[req.user.id]);
   emitHubUpdate();
   res.json({ok:true});
@@ -327,6 +331,7 @@ app.put('/api/hunts/:userId', requireAuth, (req, res) => {
   if (callLimit   !== undefined) hunt.callLimit   = callLimit;
   if (huntMode    !== undefined) hunt.huntMode    = huntMode;
   if (roundRobin  !== undefined) hunt.roundRobin  = roundRobin;
+  persistHunts();
   io.to(`hunt:${req.params.userId}`).emit('hunt:update', hunt);
   emitHubUpdate();
   res.json({ok:true});
@@ -500,7 +505,7 @@ app.get('/api/discord/parse-winners', requireAuth, async (req, res) => {
     const winners = [];
     const lines = resultsMsg.content.split('\n');
     for (const line of lines) {
-      const match = line.match(/^#(\d+)\s+(.+?)\s+(\d+\.\d+)/);
+      const match = line.match(/^#(\d+)\s+(.+?)\s+(\d+\.\d+)\s+([+-]?\d+)/);
       if (match) {
         winners.push({
           place: parseInt(match[1]),
@@ -735,6 +740,12 @@ io.on('connection', socket => {
       delete socketUsers[socket.id];
       emitHubUpdate();
     });
+  });
+
+  socket.on('leave:hunt', userId => {
+    socket.leave(`hunt:${userId}`);
+    if (viewers[userId]) viewers[userId] = Math.max(0, viewers[userId] - 1);
+    emitHubUpdate();
   });
 
   // Client sends their user id so we can compute canEdit for them
