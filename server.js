@@ -40,8 +40,14 @@ function canEditHunt(user, huntOwnerId) {
   const hunt = hunts[huntOwnerId];
   if (!hunt) return false;
   const name = nameOf(user);
+  const nameNoSp = name.replace(/\s+/g,'');
   const invites = hunt.invitedEditors || [];
-  return invites.includes(name) || invites.includes(user.id);
+  return invites.some(inv => {
+    const invLow = inv.toLowerCase().trim();
+    return invLow === name || invLow === nameNoSp || 
+           invLow.replace(/\s+/g,'') === name || invLow.replace(/\s+/g,'') === nameNoSp ||
+           inv === user.id;
+  });
 }
 function isEquityMember(user, huntOwnerId) {
   if (!user) return false;
@@ -252,11 +258,11 @@ app.post('/api/my-hunt/invite', requireAuth, (req, res) => {
   const { username } = req.body;
   if (!username) return res.status(400).json({error:'username required'});
   if (!hunts[req.user.id]) return res.status(404).json({error:'No hunt'});
-  const lower = username.toLowerCase().trim();
   if (!hunts[req.user.id].invitedEditors) hunts[req.user.id].invitedEditors = [];
+  const lower = username.toLowerCase().trim();
   if (!hunts[req.user.id].invitedEditors.includes(lower))
     hunts[req.user.id].invitedEditors.push(lower);
-  // Tell everyone watching this hunt to re-fetch their permissions
+  persistHunts();
   io.to(`hunt:${req.user.id}`).emit('hunt:reinvite', { huntUserId: req.user.id });
   res.json({ok:true, invitedEditors: hunts[req.user.id].invitedEditors});
 });
