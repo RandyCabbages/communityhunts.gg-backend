@@ -23,12 +23,12 @@ const VIP_IDS        = (process.env.VIP_IDS || '').split(',').map(s=>s.trim()).f
 function nameOf(user) { return (user?.displayName || user?.username || '').toLowerCase().trim(); }
 function isAdmin(user) {
   if (!user) return false;
-  if (user.id && ADMIN_IDS.includes(user.id)) return true;
+  if (user.id && ADMIN_IDS.length && ADMIN_IDS.includes(user.id)) return true;
   return ADMINS.includes(nameOf(user));
 }
 function isVipHost(user) {
   if (!user) return false;
-  if (user.id && VIP_IDS.includes(user.id)) return true;
+  if (user.id && VIP_IDS.length && VIP_IDS.includes(user.id)) return true;
   return VIP_HOSTS.includes(nameOf(user));
 }
 function canEditHunt(user, huntOwnerId) {
@@ -518,20 +518,23 @@ async function getSlotGames() {
 getSlotGames().catch(() => {});
 
 app.get('/api/slots/search', async (req, res) => {
-  const q = (req.query.q || '').toLowerCase().trim();
-  if (!q || q.length < 2) return res.json([]);
-  const names = await getSlotNames();
+  const q     = (req.query.q || '').toLowerCase().trim();
+  const limit = parseInt(req.query.limit) || 20;
   const games = await getSlotGames();
-  const results = games
-    .filter(g => g.name.toLowerCase().includes(q))
+  const filtered = q.length >= 2
+    ? games.filter(g => g.name.toLowerCase().includes(q))
+    : games;
+  const results = filtered
     .sort((a, b) => {
-      const aStarts = a.name.toLowerCase().startsWith(q);
-      const bStarts = b.name.toLowerCase().startsWith(q);
-      if (aStarts && !bStarts) return -1;
-      if (!aStarts && bStarts) return 1;
+      if (q.length >= 2) {
+        const aStarts = a.name.toLowerCase().startsWith(q);
+        const bStarts = b.name.toLowerCase().startsWith(q);
+        if (aStarts && !bStarts) return -1;
+        if (!aStarts && bStarts) return 1;
+      }
       return a.name.localeCompare(b.name);
     })
-    .slice(0, 20)
+    .slice(0, limit)
     .map(g => ({
       name: g.name,
       slug: g.slug,
