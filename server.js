@@ -119,8 +119,10 @@ app.get('/auth/me', (req, res) => {
 });
 
 // ── State ──────────────────────────────────────────────────────────
-const HUNTS_FILE = path.join(__dirname, 'hunts_data.json');
+const HUNTS_FILE   = path.join(__dirname, 'hunts_data.json');
+const ARCHIVE_FILE = path.join(__dirname, 'hunts_archive.json');
 const hunts   = {};
+const archive = []; // completed hunts, newest first
 const viewers = {};
 let beanLive  = { isLive: false, title: '', updatedAt: null };
 
@@ -133,9 +135,29 @@ try {
   }
 } catch(e) { console.error('[persist] Failed to load hunts:', e.message); }
 
+// Load archive on startup
+try {
+  if (fs.existsSync(ARCHIVE_FILE)) {
+    const saved = JSON.parse(fs.readFileSync(ARCHIVE_FILE, 'utf8'));
+    archive.push(...saved);
+    console.log(`[persist] Loaded ${archive.length} archived hunts`);
+  }
+} catch(e) { console.error('[persist] Failed to load archive:', e.message); }
+
 function persistHunts() {
   try { fs.writeFileSync(HUNTS_FILE, JSON.stringify(hunts), 'utf8'); }
   catch(e) { console.error('[persist] Failed to save hunts:', e.message); }
+}
+function persistArchive() {
+  try { fs.writeFileSync(ARCHIVE_FILE, JSON.stringify(archive), 'utf8'); }
+  catch(e) { console.error('[persist] Failed to save archive:', e.message); }
+}
+function archiveHunt(hunt) {
+  if (!hunt || !hunt.user) return;
+  // Save full hunt snapshot to archive (keep last 100)
+  archive.unshift({ ...hunt, archivedAt: hunt.archivedAt || new Date().toISOString() });
+  if (archive.length > 100) archive.splice(100);
+  persistArchive();
 }
 
 function huntSummary(h) {
@@ -150,9 +172,10 @@ function huntSummary(h) {
     rolledCount: (h.bonuses||[]).filter(b=>b.win>0).length,
   };
 }
-function getPublicHunts()  { return Object.values(hunts).filter(h=>h.isLive).map(huntSummary); }
-function getAllHunts()      { return Object.values(hunts).map(huntSummary); }
-function emitHubUpdate()   { persistHunts(); io.emit('hub:update', getPublicHunts()); }
+function getPublicHunts()   { return Object.values(hunts).filter(h=>h.isLive).map(huntSummary); }
+function getArchivedHunts() { return archive.map(huntSummary); }
+function getAllHunts()       { return Object.values(hunts).map(huntSummary); }
+function emitHubUpdate()    { persistHunts(); io.emit('hub:update', getPublicHunts()); }
 function emitHuntUpdate(userId) { const h = hunts[userId]; if (h) { persistHunts(); io.to(`hunt:${userId}`).emit('hunt:update', h); } }
 
 function requireAuth(req, res, next)  { if (!req.user) return res.status(401).json({error:'Not authenticated'}); next(); }
@@ -160,7 +183,8 @@ function requireAdmin(req, res, next) { if (!req.user||!isAdmin(req.user)) retur
 function uid() { return Math.random().toString(36).slice(2, 8); }
 
 // ── Public hunt endpoints ──────────────────────────────────────────
-app.get('/api/hunts', (req, res) => res.json(getPublicHunts()));
+app.get('/api/hunts',          (req, res) => res.json(getPublicHunts()));
+app.get('/api/hunts/archived', (req, res) => res.json(getArchivedHunts()));
 
 app.get('/api/hunts/:userId', (req, res) => {
   const hunt = hunts[req.params.userId];
@@ -198,6 +222,11 @@ app.post('/api/my-hunt/start', requireAuth, (req, res) => {
   const { huntType = 'community' } = req.body;
   if (huntType === 'vip' && !isAdmin(req.user) && !isVipHost(req.user))
     return res.status(403).json({error:'Not authorised for VIP hunts'});
+  // Archive previous hunt if it had any bonuses
+  if (hunts[req.user.id] && hunts[req.user.id].bonuses?.length > 0) {
+    if (!hunts[req.user.id].archivedAt) hunts[req.user.id].archivedAt = new Date().toISOString();
+    archiveHunt(hunts[req.user.id]);
+  }
   hunts[req.user.id] = {
     user: req.user, isLive: false, startedAt: null, archivedAt: null,
     huntType, bonuses: [], equity: huntType==='vip'?[{id:'bean_auto',name:'Bean',amount:1000,isRollWinner:false}]:[], calls: [], invitedEditors: [], callLimit: 0, huntMode: 'creating'
@@ -220,13 +249,19 @@ app.post('/api/my-hunt/end', requireAuth, (req, res) => {
   if (hunts[req.user.id]) {
     hunts[req.user.id].isLive    = false;
     hunts[req.user.id].archivedAt= new Date().toISOString();
-    emitHubUpdate(); // emitHubUpdate calls persistHunts
+    archiveHunt(hunts[req.user.id]);
+    emitHubUpdate();
     io.to(`hunt:${req.user.id}`).emit('hunt:update', hunts[req.user.id]);
   }
   res.json({ok:true});
 });
 
 app.post('/api/my-hunt/reset', requireAuth, (req, res) => {
+  // Archive the hunt before wiping it
+  if (hunts[req.user.id] && hunts[req.user.id].bonuses?.length > 0) {
+    if (!hunts[req.user.id].archivedAt) hunts[req.user.id].archivedAt = new Date().toISOString();
+    archiveHunt(hunts[req.user.id]);
+  }
   hunts[req.user.id] = { user: req.user, isLive: false, startedAt: null, archivedAt: null,
     huntType: 'community', bonuses: [], equity: [], calls: [], invitedEditors: [], callLimit: 0, huntMode: 'creating' };
   persistHunts();
@@ -344,6 +379,7 @@ app.post('/api/admin/hunts/:userId/end', requireAdmin, (req, res) => {
   const h = hunts[req.params.userId];
   if (!h) return res.status(404).json({error:'Not found'});
   h.isLive = false; h.archivedAt = new Date().toISOString();
+  archiveHunt(h);
   emitHubUpdate(); io.to(`hunt:${req.params.userId}`).emit('hunt:update', h);
   res.json({ok:true});
 });
