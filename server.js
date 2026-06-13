@@ -562,7 +562,7 @@ app.get('/api/discord/parse-winners', requireAuth, async (req, res) => {
 // ── Slot Autocomplete ─────────────────────────────────────────────
 let slotCache = { games: [], thumbMap: {}, fetchedAt: 0 };
 
-// Softswiss CDN provider code map — covers ~3800 slots across 17 providers
+// Softswiss CDN provider code map — covers ~3800 slots across 20 providers
 // URL pattern: https://cdn.softswiss.net/i/s4/{code}/{PascalCaseSlugName}.webp
 const SOFTSWISS_PROVIDERS = {
   'pragmatic-play':   'pragmatic',
@@ -582,6 +582,9 @@ const SOFTSWISS_PROVIDERS = {
   'push-gaming':      'pushgaming',
   'yggdrasil':        'yggdrasil',
   'wazdan':           'wazdan',
+  'big-time-gaming':  'evolution',   // BTG acquired by Evolution group
+  'iron-dog-studio':  '1x2gaming',   // Iron Dog is 1x2 Gaming on softswiss
+  'backseat-gaming':  'hacksaw',     // Backseat Gaming is a Hacksaw sub-label
 };
 function toPascal(slug) {
   return slug.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join('');
@@ -630,19 +633,36 @@ async function getSlotGames() {
       } catch(e) { console.error('[slots] Failed to parse slots-cards.js:', e.message); }
     }
 
+    // Hardcoded thumbnails for popular slots not covered by slot.report or softswiss CDN
+    const EXTRA_THUMBS = {
+      'le-pharaoh': 'https://cdn.softswiss.net/i/s4/hacksaw/LePharaoh.webp',
+    };
+    Object.entries(EXTRA_THUMBS).forEach(([slug, url]) => {
+      if (!thumbMap[slug]) thumbMap[slug] = url;
+    });
+
     // Filter to relevant providers only, sort reviewed slots first
     const allGames = (gamesData.results || []).filter(s => s.name);
     const relevant = allGames.filter(g =>
       RELEVANT_PROVIDERS.has(g.provider_slug) || reviewedSlugs.has(g.slug)
     );
-    relevant.sort((a, b) => {
+
+    // Deduplicate by slug (keep first occurrence)
+    const seenSlugs = new Set();
+    const deduped = relevant.filter(g => {
+      if (seenSlugs.has(g.slug)) return false;
+      seenSlugs.add(g.slug);
+      return true;
+    });
+
+    deduped.sort((a, b) => {
       const aR = reviewedSlugs.has(a.slug), bR = reviewedSlugs.has(b.slug);
       if (aR && !bR) return -1;
       if (!aR && bR) return 1;
       return a.name.localeCompare(b.name);
     });
 
-    slotCache.games     = relevant;
+    slotCache.games     = deduped;
     slotCache.thumbMap  = thumbMap;
     slotCache.fetchedAt = Date.now();
     console.log(`[slots] Cached ${relevant.length} relevant slots (from ${allGames.length} total)`);
