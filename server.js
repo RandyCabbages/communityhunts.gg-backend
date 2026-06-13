@@ -346,6 +346,7 @@ app.delete('/api/my-hunt/invite', requireAuth, (req, res) => {
   if (!hunts[req.user.id]) return res.status(404).json({error:'No hunt'});
   hunts[req.user.id].invitedEditors = (hunts[req.user.id].invitedEditors||[])
     .filter(u => u !== username.toLowerCase().trim());
+  persistHunts();
   io.to(`hunt:${req.user.id}`).emit('hunt:reinvite', { huntUserId: req.user.id });
   res.json({ok:true, invitedEditors: hunts[req.user.id].invitedEditors});
 });
@@ -917,11 +918,11 @@ app.post('/api/hunts/:userId/call-requests/:requestId', requireAuth, (req, res) 
   huntCallRequests[userId] = requests.filter(r => r.id !== requestId);
 
   if (action === 'grant') {
-    // Add to invitedEditors as calls-only
     if (!hunts[userId].callsPermissions) hunts[userId].callsPermissions = [];
     if (!hunts[userId].callsPermissions.includes(reqItem.userId)) {
       hunts[userId].callsPermissions.push(reqItem.userId);
     }
+    persistHunts();
     // Notify the requester
     io.to(`hunt:${userId}`).emit('calls:granted', { userId: reqItem.userId });
   } else {
