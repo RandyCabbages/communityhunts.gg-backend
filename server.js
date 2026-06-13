@@ -395,38 +395,75 @@ app.delete('/api/admin/hunts/:userId', requireAdmin, (req, res) => {
 });
 
 // ── User Settings ──────────────────────────────────────────────────
+// ── User Settings (Postgres-backed) ───────────────────────────────
+// Falls back to in-memory if DATABASE_URL not set
+const { Pool } = require('pg');
+let pgPool = null;
+if (process.env.DATABASE_URL) {
+  pgPool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
+  pgPool.query(`
+    CREATE TABLE IF NOT EXISTS user_settings (
+      user_id TEXT PRIMARY KEY,
+      settings JSONB NOT NULL DEFAULT '{}'
+    )
+  `).then(() => console.log('[settings] Postgres table ready'))
+    .catch(e => { console.error('[settings] Postgres init failed:', e.message); pgPool = null; });
+} else {
+  console.log('[settings] No DATABASE_URL — using in-memory settings (will reset on redeploy)');
+}
+
 const SETTINGS_FILE = path.join(__dirname, 'user_settings.json');
 let userSettings = {};
 try {
   if (fs.existsSync(SETTINGS_FILE)) {
     userSettings = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8'));
-    console.log(`[settings] Loaded settings for ${Object.keys(userSettings).length} users`);
+    console.log(`[settings] Loaded ${Object.keys(userSettings).length} users from file`);
   }
 } catch(e) { console.error('[settings] Failed to load user_settings.json:', e.message); }
 
-function persistSettings() {
-  try { fs.writeFileSync(SETTINGS_FILE, JSON.stringify(userSettings), 'utf8'); }
-  catch(e) { console.error('[settings] Failed to persist:', e.message); }
+async function getSettings(userId) {
+  if (pgPool) {
+    try {
+      const r = await pgPool.query('SELECT settings FROM user_settings WHERE user_id=$1', [userId]);
+      return r.rows[0]?.settings || { rainbetName: '', preferredSlots: [] };
+    } catch(e) { console.error('[settings] pg getSettings error:', e.message); }
+  }
+  return userSettings[userId] || { rainbetName: '', preferredSlots: [] };
+}
+
+async function saveSettings(userId, data) {
+  if (pgPool) {
+    try {
+      await pgPool.query(
+        'INSERT INTO user_settings(user_id, settings) VALUES($1,$2) ON CONFLICT(user_id) DO UPDATE SET settings=$2',
+        [userId, JSON.stringify(data)]
+      );
+      return;
+    } catch(e) { console.error('[settings] pg saveSettings error:', e.message); }
+  }
+  // Fallback to file
+  userSettings[userId] = data;
+  try { fs.writeFileSync(SETTINGS_FILE, JSON.stringify(userSettings), 'utf8'); } catch(e) {}
 }
 
 // GET /api/settings — get current user's settings
-app.get('/api/settings', requireAuth, (req, res) => {
-  res.json(userSettings[req.user.id] || { rainbetName: '', preferredSlots: [] });
+app.get('/api/settings', requireAuth, async (req, res) => {
+  res.json(await getSettings(req.user.id));
 });
 
 // PUT /api/settings — save current user's settings
-app.put('/api/settings', requireAuth, (req, res) => {
+app.put('/api/settings', requireAuth, async (req, res) => {
+  const current = await getSettings(req.user.id);
   const { rainbetName, preferredSlots } = req.body;
-  if (!userSettings[req.user.id]) userSettings[req.user.id] = {};
-  if (rainbetName !== undefined)    userSettings[req.user.id].rainbetName    = String(rainbetName).trim().slice(0, 64);
-  if (preferredSlots !== undefined) userSettings[req.user.id].preferredSlots = (preferredSlots || []).slice(0, 8);
-  persistSettings();
-  res.json({ ok: true, settings: userSettings[req.user.id] });
+  if (rainbetName !== undefined)    current.rainbetName    = String(rainbetName).trim().slice(0, 64);
+  if (preferredSlots !== undefined) current.preferredSlots = (preferredSlots || []).slice(0, 8);
+  await saveSettings(req.user.id, current);
+  res.json({ ok: true, settings: current });
 });
 
 // GET /api/settings/:userId — get another user's preferred slots by Discord ID
-app.get('/api/settings/:userId', requireAuth, (req, res) => {
-  const s = userSettings[req.params.userId] || { rainbetName: '', preferredSlots: [] };
+app.get('/api/settings/:userId', requireAuth, async (req, res) => {
+  const s = await getSettings(req.params.userId);
   res.json({ preferredSlots: s.preferredSlots || [] });
 });
 
