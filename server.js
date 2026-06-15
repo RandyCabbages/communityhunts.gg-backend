@@ -33,6 +33,41 @@ function isVipHost(user) {
   if (user.id && VIP_IDS.length && VIP_IDS.includes(user.id)) return true;
   return VIP_HOSTS.includes(nameOf(user));
 }
+
+// ── HMAC-signed auth tokens ────────────────────────────────────────
+// Fallback when third-party cookies are blocked (Safari, Brave, etc).
+// Token format: base64url(payload) + "." + base64url(hmacSha256(payload))
+// Payload: JSON {id, username, displayName, avatar, exp}
+const crypto = require('crypto');
+function b64url(buf) {
+  return Buffer.from(buf).toString('base64').replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+}
+function b64urlDecode(s) {
+  s = s.replace(/-/g,'+').replace(/_/g,'/');
+  while (s.length % 4) s += '=';
+  return Buffer.from(s, 'base64').toString('utf8');
+}
+function signToken(user) {
+  const payload = {
+    id: user.id, username: user.username,
+    displayName: user.displayName, avatar: user.avatar,
+    exp: Date.now() + 7 * 24 * 60 * 60 * 1000, // 7 days
+  };
+  const payloadB64 = b64url(JSON.stringify(payload));
+  const sig = b64url(crypto.createHmac('sha256', SESSION_SECRET).update(payloadB64).digest());
+  return `${payloadB64}.${sig}`;
+}
+function verifyToken(token) {
+  if (!token || typeof token !== 'string' || !token.includes('.')) return null;
+  const [payloadB64, sig] = token.split('.');
+  const expectedSig = b64url(crypto.createHmac('sha256', SESSION_SECRET).update(payloadB64).digest());
+  if (sig !== expectedSig) return null;
+  try {
+    const payload = JSON.parse(b64urlDecode(payloadB64));
+    if (!payload.exp || payload.exp < Date.now()) return null;
+    return payload;
+  } catch(e) { return null; }
+}
 function canEditHunt(user, huntOwnerId) {
   if (!user) return false;
   if (isAdmin(user)) return true;
@@ -124,6 +159,24 @@ app.use(session(sessionConfig));
 app.use(passport.initialize());
 app.use(passport.session());
 
+// Token-based auth fallback — for browsers that block third-party cookies.
+// If req.user wasn't set by passport session, check for Authorization: Bearer <token>
+app.use((req, res, next) => {
+  if (!req.user) {
+    const auth = req.headers.authorization || '';
+    if (auth.startsWith('Bearer ')) {
+      const payload = verifyToken(auth.slice(7));
+      if (payload) {
+        req.user = {
+          id: payload.id, username: payload.username,
+          displayName: payload.displayName, avatar: payload.avatar
+        };
+      }
+    }
+  }
+  next();
+});
+
 // ── Passport ───────────────────────────────────────────────────────
 passport.use(new DiscordStrategy({
   clientID: process.env.DISCORD_CLIENT_ID,
@@ -156,9 +209,10 @@ app.get('/auth/discord/callback',
     })).toString('base64');
     const returnTo = req.session.returnTo || '/';
     delete req.session.returnTo;
-    // Encode returnTo as a query param so frontend can redirect after auth
+    // Signed token — frontend stores this and sends as Bearer in case cookies are blocked
+    const token = signToken(req.user);
     const returnParam = returnTo !== '/' ? `&returnTo=${encodeURIComponent(returnTo)}` : '';
-    res.redirect(`${FRONTEND_URL}/?auth=${encodeURIComponent(userData)}${returnParam}`);
+    res.redirect(`${FRONTEND_URL}/?auth=${encodeURIComponent(userData)}&t=${encodeURIComponent(token)}${returnParam}`);
   }
 );
 app.get('/auth/logout', (req, res) => req.logout(() => res.redirect(FRONTEND_URL)));
