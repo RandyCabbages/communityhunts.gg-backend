@@ -204,6 +204,8 @@ app.get('/auth/discord', (req, res, next) => {
 app.get('/auth/discord/callback',
   passport.authenticate('discord', { failureRedirect: `${FRONTEND_URL}/?error=auth` }),
   (req, res) => {
+    // Record this user as known so they show up in equity-name autocomplete for others
+    recordKnownUser(req.user);
     const userData = Buffer.from(JSON.stringify({
       id: req.user.id, username: req.user.username,
       displayName: req.user.displayName, avatar: req.user.avatar,
@@ -221,6 +223,24 @@ app.get('/auth/logout', (req, res) => req.logout(() => res.redirect(FRONTEND_URL
 app.get('/auth/me', (req, res) => {
   if (!req.user) return res.json({ user: null });
   res.json({ user: { ...req.user, isAdmin: isAdmin(req.user), isVipHost: isAdmin(req.user)||isVipHost(req.user) } });
+});
+
+// Public list of known users for equity-name autocomplete.
+// Returns {id, displayName, avatar} for everyone who's ever logged in, sorted by recency.
+app.get('/api/known-users', async (req, res) => {
+  if (!pgPool) return res.json([]);
+  try {
+    const r = await pgPool.query(
+      `SELECT user_id AS id, display_name AS "displayName", avatar
+       FROM known_users
+       ORDER BY last_seen DESC
+       LIMIT 500`
+    );
+    res.json(r.rows);
+  } catch(e) {
+    console.error('[known_users] list failed:', e.message);
+    res.json([]);
+  }
 });
 
 // ── State ──────────────────────────────────────────────────────────
@@ -595,6 +615,34 @@ if (pgPool) {
     )
   `).then(() => console.log('[settings] Postgres table ready'))
     .catch(e => console.error('[settings] Postgres init failed:', e.message));
+  // Track everyone who's ever logged in, for equity name autocomplete
+  pgPool.query(`
+    CREATE TABLE IF NOT EXISTS known_users (
+      user_id TEXT PRIMARY KEY,
+      display_name TEXT NOT NULL,
+      username TEXT,
+      avatar TEXT,
+      last_seen TIMESTAMP NOT NULL DEFAULT NOW()
+    )
+  `).then(() => console.log('[known_users] Postgres table ready'))
+    .catch(e => console.error('[known_users] init failed:', e.message));
+}
+
+// Records a user as known. Safe to call on every login.
+function recordKnownUser(user) {
+  if (!user?.id || !user?.displayName) return;
+  if (pgPool) {
+    pgPool.query(
+      `INSERT INTO known_users (user_id, display_name, username, avatar, last_seen)
+       VALUES ($1, $2, $3, $4, NOW())
+       ON CONFLICT (user_id) DO UPDATE SET
+         display_name = EXCLUDED.display_name,
+         username = EXCLUDED.username,
+         avatar = EXCLUDED.avatar,
+         last_seen = NOW()`,
+      [user.id, user.displayName, user.username || null, user.avatar || null]
+    ).catch(e => console.error('[known_users] insert failed:', e.message));
+  }
 }
 
 const SETTINGS_FILE = path.join(__dirname, 'user_settings.json');
