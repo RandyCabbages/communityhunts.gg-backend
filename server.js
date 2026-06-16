@@ -173,6 +173,8 @@ app.use((req, res, next) => {
           id: payload.id, username: payload.username,
           displayName: payload.displayName, avatar: payload.avatar
         };
+        // Also record in known_users so they show in equity autocomplete for others
+        recordKnownUser(req.user);
       }
     }
   }
@@ -222,6 +224,9 @@ app.get('/auth/discord/callback',
 app.get('/auth/logout', (req, res) => req.logout(() => res.redirect(FRONTEND_URL)));
 app.get('/auth/me', (req, res) => {
   if (!req.user) return res.json({ user: null });
+  // Anyone who hits /auth/me with a valid session has logged in at some point.
+  // Record (or refresh) them in known_users so they show up in equity autocomplete.
+  recordKnownUser(req.user);
   res.json({ user: { ...req.user, isAdmin: isAdmin(req.user), isVipHost: isAdmin(req.user)||isVipHost(req.user) } });
 });
 
@@ -317,7 +322,7 @@ async function loadPersistedState() {
   }
   if (totalRemoved > 0) console.log(`[persist] Removed ${totalRemoved} duplicate calls on startup`);
 }
-loadPersistedState().catch(e => console.error('[persist] loadPersistedState error:', e.message));
+loadPersistedState().then(() => startupBackfill()).catch(e => console.error('[persist] loadPersistedState error:', e.message));
 
 function persistHunts() {
   // Bulletproof: dedupe call arrays before persisting. Keeps first occurrence of each slot.
@@ -644,6 +649,41 @@ function recordKnownUser(user) {
     ).catch(e => console.error('[known_users] insert failed:', e.message));
   }
 }
+
+// Backfill known_users from existing user_settings (and hunts) on startup.
+// Without this, returning users wouldn't appear in equity autocomplete until they re-login.
+async function backfillKnownUsers() {
+  if (!pgPool) return;
+  let inserted = 0;
+  // From user_settings — settings JSON has discordDisplayName / discordUsername fields
+  try {
+    const r = await pgPool.query('SELECT user_id, settings FROM user_settings');
+    for (const row of r.rows) {
+      const s = row.settings || {};
+      const dn = s.discordDisplayName || s.rainbetName;
+      if (dn) {
+        recordKnownUser({
+          id: row.user_id,
+          displayName: dn,
+          username: s.discordUsername || null,
+          avatar: s.discordAvatar || null,
+        });
+        inserted++;
+      }
+    }
+  } catch(e) { console.error('[known_users] settings backfill failed:', e.message); }
+  // From hunts (each hunt has a user object with displayName)
+  for (const id in hunts) {
+    const u = hunts[id]?.user;
+    if (u?.id && u?.displayName) {
+      recordKnownUser({ id: u.id, displayName: u.displayName, username: u.username, avatar: u.avatar });
+      inserted++;
+    }
+  }
+  console.log(`[known_users] backfill queued ${inserted} users`);
+}
+// Run backfill after hunts are loaded so the hunts loop sees data
+function startupBackfill() { backfillKnownUsers().catch(e => console.error('[known_users] backfill error:', e.message)); }
 
 const SETTINGS_FILE = path.join(__dirname, 'user_settings.json');
 let userSettings = {};
