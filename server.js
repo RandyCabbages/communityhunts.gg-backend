@@ -847,6 +847,36 @@ app.post('/api/admin/set-rainbet-name', requireAdmin, async (req, res) => {
 
 
 
+// POST /api/admin/set-user-field — let an admin manually set a per-user identity field
+// (rainbetName or twitchName) for someone else. Accepts either { userId, field, value } or
+// { name, field, value }. Name-only path uses synthetic id keyed on the lowercased name so
+// the existing by-name lookup will match it later via discordDisplayName.
+app.post('/api/admin/set-user-field', requireAdmin, async (req, res) => {
+  const field = String(req.body?.field || '').trim();
+  if (!['rainbetName', 'twitchName'].includes(field))
+    return res.status(400).json({ error: "field must be 'rainbetName' or 'twitchName'" });
+  const value = String(req.body?.value || '').trim().slice(0, 64);
+  if (!value) return res.status(400).json({ error: 'value required' });
+  const userId = (req.body?.userId || '').toString().trim();
+  const name   = (req.body?.name   || '').toString().trim();
+  if (!userId && !name) return res.status(400).json({ error: 'Provide userId or name' });
+
+  if (userId) {
+    const current = await getSettings(userId);
+    current[field] = value;
+    await saveSettings(userId, current);
+    return res.json({ ok: true, scope: 'userId', userId, field, value });
+  }
+
+  const syntheticId = `manual:${name.toLowerCase()}`;
+  const current = await getSettings(syntheticId);
+  current[field]              = value;
+  current.discordDisplayName  = current.discordDisplayName || name;
+  current.discordUsername     = current.discordUsername    || name;
+  await saveSettings(syntheticId, current);
+  res.json({ ok: true, scope: 'name', name, syntheticId, field, value });
+});
+
 app.post('/api/tickets', async (req, res) => {
   const { username, issue, type } = req.body;
   const botToken = process.env.DISCORD_BOT_TOKEN;
