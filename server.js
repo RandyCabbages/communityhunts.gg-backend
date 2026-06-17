@@ -461,7 +461,7 @@ app.post('/api/my-hunt/start', requireAuth, (req, res) => {
   }
   hunts[req.user.id] = {
     user: req.user, isLive: false, startedAt: null, archivedAt: null,
-    huntType, bonuses: [], equity: huntType==='vip'?[{id:'bean_auto',name:'Bean',amount:1000,isRollWinner:false}]:[], calls: [], invitedEditors: [], callLimit: 0, huntMode: 'creating', roundRobin: true
+    huntType, bonuses: [], equity: huntType==='vip'?[{id:'bean_auto',name:'Bean',amount:1000,isRollWinner:false}]:[], calls: [], invitedEditors: [], callLimit: 10, huntMode: 'creating', roundRobin: true
   };
   persistHunts();
   res.json({ok:true});
@@ -495,7 +495,7 @@ app.post('/api/my-hunt/reset', requireAuth, (req, res) => {
     archiveHunt(hunts[req.user.id]);
   }
   hunts[req.user.id] = { user: req.user, isLive: false, startedAt: null, archivedAt: null,
-    huntType: 'community', bonuses: [], equity: [], calls: [], invitedEditors: [], callLimit: 0, huntMode: 'creating', roundRobin: true };
+    huntType: 'community', bonuses: [], equity: [], calls: [], invitedEditors: [], callLimit: 10, huntMode: 'creating', roundRobin: true };
   persistHunts();
   emitHubUpdate();
   res.json({ok:true});
@@ -504,7 +504,7 @@ app.post('/api/my-hunt/reset', requireAuth, (req, res) => {
 app.put('/api/my-hunt', requireAuth, (req, res) => {
   if (!hunts[req.user.id]) hunts[req.user.id] = {
     user: req.user, isLive: false, startedAt: null, archivedAt: null,
-    huntType: 'community', bonuses: [], equity: [], calls: [], invitedEditors: [], callLimit: 0
+    huntType: 'community', bonuses: [], equity: [], calls: [], invitedEditors: [], callLimit: 10
   };
   const { bonuses, equity, calls, huntType, callLimit, huntMode, roundRobin } = req.body;
   if (bonuses    !== undefined) hunts[req.user.id].bonuses    = bonuses;
