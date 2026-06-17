@@ -21,6 +21,7 @@ const ADMINS         = (process.env.ADMINS || 'bean,randycabbage,randy cabbage,m
 const ADMIN_IDS      = (process.env.ADMIN_IDS || '').split(',').map(s=>s.trim()).filter(Boolean);
 const VIP_HOSTS      = (process.env.VIP_HOSTS || 'bean,mcflurry,mihallimou,missingiscool,cuda,randycabbage,cabbage,goofer').toLowerCase().split(',').map(s=>s.trim());
 const VIP_IDS        = (process.env.VIP_IDS || '').split(',').map(s=>s.trim()).filter(Boolean);
+const TICKET_RECIPIENTS = (process.env.TICKET_RECIPIENTS || '135203806676779008').split(',').map(s=>s.trim()).filter(Boolean);
 
 function nameOf(user) { return (user?.displayName || user?.username || '').toLowerCase().trim(); }
 // Normalize slot name for dedup: strip punctuation, collapse whitespace, lowercase
@@ -973,32 +974,47 @@ app.post('/api/tickets', async (req, res) => {
   const { username, issue, type } = req.body;
   const botToken = process.env.DISCORD_BOT_TOKEN;
   if (!botToken) return res.status(500).json({error:'Bot token not configured'});
-  try {
-    // Open DM channel with Randy
-    const dmRes = await fetch('https://discord.com/api/v10/users/@me/channels', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bot ${botToken}` },
-      body: JSON.stringify({ recipient_id: RANDY_DISCORD_ID })
-    });
-    const dmData = await dmRes.json();
-    if (!dmData.id) throw new Error('Could not open DM channel');
+  if (TICKET_RECIPIENTS.length === 0) return res.status(500).json({error:'No ticket recipients configured'});
 
-    // Send message
-    await fetch(`https://discord.com/api/v10/channels/${dmData.id}/messages`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bot ${botToken}` },
-      body: JSON.stringify({
-        embeds: [{
-          title: `🎫 Ticket — ${type||'General'}`,
-          description: issue,
-          color: 0xf5a500,
-          fields: [{ name: 'From', value: username||'Anonymous', inline: true }],
-          timestamp: new Date().toISOString()
-        }]
-      })
-    });
-    res.json({ok:true});
-  } catch(e) { console.error('Ticket error:', e.message); res.status(500).json({error:'Failed to send ticket'}); }
+  const embed = {
+    title: `🎫 Ticket — ${type||'General'}`,
+    description: issue,
+    color: 0x9146ff,
+    fields: [{ name: 'From', value: username||'Anonymous', inline: true }],
+    timestamp: new Date().toISOString()
+  };
+
+  // Fan out to every recipient. Track individual outcomes so one bad id doesn't
+  // sink the others — the ticket counts as delivered if at least one DM succeeds.
+  const results = await Promise.all(TICKET_RECIPIENTS.map(async recipientId => {
+    try {
+      const dmRes = await fetch('https://discord.com/api/v10/users/@me/channels', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bot ${botToken}` },
+        body: JSON.stringify({ recipient_id: recipientId })
+      });
+      const dmData = await dmRes.json();
+      if (!dmData.id) throw new Error(`Could not open DM channel for ${recipientId}: ${JSON.stringify(dmData)}`);
+
+      const msgRes = await fetch(`https://discord.com/api/v10/channels/${dmData.id}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bot ${botToken}` },
+        body: JSON.stringify({ embeds: [embed] })
+      });
+      if (!msgRes.ok) throw new Error(`Send failed for ${recipientId}: ${msgRes.status}`);
+      return { recipientId, ok: true };
+    } catch (e) {
+      console.error('[ticket] delivery failed:', e.message);
+      return { recipientId, ok: false, error: e.message };
+    }
+  }));
+
+  const delivered = results.filter(r => r.ok).length;
+  if (delivered === 0) {
+    return res.status(500).json({error:'Failed to send ticket to any recipient', results});
+  }
+  console.log(`[ticket] delivered to ${delivered}/${TICKET_RECIPIENTS.length} recipients`);
+  res.json({ ok: true, delivered, total: TICKET_RECIPIENTS.length });
 });
 
 // ── Twitch live check ──────────────────────────────────────────────
