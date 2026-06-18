@@ -198,6 +198,18 @@ app.use((req, res, next) => {
   next();
 });
 
+// Resolve the tenant for every /api request. Defaults to Bean when MULTI_TENANT is off
+// or no X-Tenant-Slug is sent (back-compat — the current frontend may not send it yet).
+function resolveTenant(req, res, next) {
+  const slug = req.headers['x-tenant-slug'] || req.query._tenant;
+  if (!MULTI_TENANT || !slug) { req.tenant = tenants.BEAN_TENANT; return next(); }
+  const t = tenants.getTenantBySlug(String(slug));
+  if (!t) return res.status(404).json({ error: 'Unknown tenant' });
+  req.tenant = t;
+  next();
+}
+app.use('/api', resolveTenant);
+
 // ── Passport ───────────────────────────────────────────────────────
 passport.use(new DiscordStrategy({
   clientID: process.env.DISCORD_CLIENT_ID,
@@ -275,6 +287,11 @@ const { hunts, archive, persistHunts, persistArchive, archiveHunt } = persistenc
 persistence.initPersistence({ pgPool, normalizeSlot })
   .then(() => startupBackfill())
   .catch(e => console.error('[persist] init error:', e.message));
+
+// Multi-tenancy config (tenants + roles). Gated by MULTI_TENANT; defaults to Bean.
+const tenants = require('./lib/tenants');
+const MULTI_TENANT = process.env.MULTI_TENANT === 'true';
+tenants.initTenants({ pgPool }).catch(e => console.error('[tenants] init error:', e.message));
 
 function huntSummary(h) {
   return {
