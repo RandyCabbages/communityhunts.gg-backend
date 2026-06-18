@@ -316,8 +316,7 @@ function inTenant(h, tenantId) { return tenantOf(h) === (tenantId || 'bean'); }
 function getPublicHunts(tenantId)   { return Object.values(hunts).filter(h=>h.isLive && inTenant(h,tenantId)).map(huntSummary); }
 function getArchivedHunts(tenantId) { return archive.filter(h=>inTenant(h,tenantId)).map(huntSummary); }
 function getAllHunts(tenantId)       { return Object.values(hunts).filter(h=>inTenant(h,tenantId)).map(huntSummary); }
-// NOTE: still a global broadcast for now; payload is tenant-filtered. Room scoping lands in the socket task.
-function emitHubUpdate(tenantId)    { persistHunts(); io.emit('hub:update', getPublicHunts(tenantId)); }
+function emitHubUpdate(tenantId)    { persistHunts(); io.to('hub:'+(tenantId||'bean')).emit('hub:update', getPublicHunts(tenantId)); }
 function emitHuntUpdate(userId) { const h = hunts[userId]; if (h) { persistHunts(); io.to(`hunt:${userId}`).emit('hunt:update', h); } }
 
 function requireAuth(req, res, next)  { if (!req.user) return res.status(401).json({error:'Not authenticated'}); next(); }
@@ -1056,17 +1055,20 @@ app.post('/api/tickets', async (req, res) => {
 // ── External integrations (Twitch live, leaderboard, Discord) ──────
 // Logic lives in lib/integrations.js; route declarations stay here and delegate.
 const integrations = require('./lib/integrations');
-integrations.startTwitchPolling(io);
+// Poll each active tenant's Twitch channel. Runs after tenants load.
+function startPolling() { integrations.startTenantPolling(io, tenants.getAllTenants()); }
+// initTenants() is async; give it a beat, then start polling (Bean is in cache immediately anyway).
+setTimeout(startPolling, 3000);
 
-app.get('/api/bean-live', (req, res) => res.json(integrations.getBeanLive()));
+app.get('/api/bean-live', (req, res) => res.json(integrations.getLiveStatus(req.tenant.slug)));
 
 app.get('/api/leaderboard', async (req, res) => {
   try {
-    res.json(await integrations.getLeaderboard());
+    res.json(await integrations.getLeaderboard(req.tenant));
   } catch (e) {
     console.error('[leaderboard] proxy error:', e.message);
     // Serve stale cache if we have it, so a transient upstream blip doesn't blank the panel.
-    const stale = integrations.getLeaderboardCache();
+    const stale = integrations.getLeaderboardCache(req.tenant.slug);
     if (stale) return res.json(stale);
     res.status(502).json({ error: 'leaderboard unavailable' });
   }
@@ -1077,7 +1079,7 @@ app.get('/api/discord/import-calls', requireAuth, async (req, res) => {
   try {
     const hunt = hunts[req.user.id];
     if (!hunt) return res.status(404).json({ error: 'No active hunt' });
-    res.json(await integrations.importCalls(hunt, normalizeSlot));
+    res.json(await integrations.importCalls(hunt, normalizeSlot, req.tenant));
   } catch(e) {
     res.status(500).json({ error: e.message });
   }
@@ -1086,7 +1088,7 @@ app.get('/api/discord/import-calls', requireAuth, async (req, res) => {
 // Parse VIP winners from Discord — finds latest results message and extracts names.
 app.get('/api/discord/parse-winners', requireAuth, async (req, res) => {
   try {
-    res.json(await integrations.parseWinners());
+    res.json(await integrations.parseWinners(req.tenant));
   } catch(e) {
     res.status(500).json({ error: e.message });
   }
@@ -1428,10 +1430,13 @@ app.post('/api/hunts/:userId/call-requests/:requestId', requireAuth, (req, res) 
 const socketUsers = {};
 
 io.on('connection', socket => {
+  // Tenant slug from the handshake query (?_tenant=); defaults to bean for back-compat.
+  const slug = socket.handshake.query._tenant || 'bean';
+
   socket.on('watch:hub', () => {
-    socket.join('hub');
-    socket.emit('hub:update', getPublicHunts());
-    socket.emit('bean:live', integrations.getBeanLive());
+    socket.join('hub:' + slug);
+    socket.emit('hub:update', getPublicHunts(slug));
+    socket.emit('bean:live', integrations.getLiveStatus(slug));
   });
 
   socket.on('watch:hunt', userId => {
@@ -1440,18 +1445,18 @@ io.on('connection', socket => {
     viewers[userId] = (viewers[userId]||0) + 1;
     const h = hunts[userId];
     if (h) socket.emit('hunt:update', h);
-    emitHubUpdate();
+    emitHubUpdate(tenantOf(h || {}));
     socket.on('disconnect', () => {
       viewers[userId] = Math.max(0,(viewers[userId]||1)-1);
       delete socketUsers[socket.id];
-      emitHubUpdate();
+      emitHubUpdate(tenantOf(hunts[userId] || {}));
     });
   });
 
   socket.on('leave:hunt', userId => {
     socket.leave(`hunt:${userId}`);
     if (viewers[userId]) viewers[userId] = Math.max(0, viewers[userId] - 1);
-    emitHubUpdate();
+    emitHubUpdate(tenantOf(hunts[userId] || {}));
   });
 
   // Client sends their user id so we can compute canEdit for them
