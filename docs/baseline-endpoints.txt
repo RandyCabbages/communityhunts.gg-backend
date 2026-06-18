@@ -1,0 +1,65 @@
+219:app.get('/auth/discord', (req, res, next) => {
+223:app.get('/auth/discord/callback',
+241:app.get('/auth/logout', (req, res) => req.logout(() => res.redirect(FRONTEND_URL)));
+242:app.get('/auth/me', (req, res) => {
+252:app.get('/api/known-users', async (req, res) => {
+427:app.get('/api/hunts',          (req, res) => res.json(getPublicHunts()));
+428:app.get('/api/hunts/archived', (req, res) => res.json(getArchivedHunts()));
+433:app.get('/api/bangers', (req, res) => {
+467:app.get('/api/hunts/:userId/archived/:archivedAt', (req, res) => {
+474:app.get('/api/hunts/:userId', (req, res) => {
+527:app.get('/api/my-hunt', requireAuth, (req, res) => res.json(hunts[req.user.id] || null));
+536:app.post('/api/my-hunt/start', requireAuth, (req, res) => {
+560:app.post('/api/my-hunt/golive', requireAuth, (req, res) => {
+570:app.post('/api/my-hunt/end', requireAuth, (req, res) => {
+581:app.post('/api/my-hunt/reset', requireAuth, (req, res) => {
+597:app.put('/api/my-hunt', requireAuth, (req, res) => {
+622:app.post('/api/my-hunt/invite', requireAuth, (req, res) => {
+635:app.delete('/api/my-hunt/invite', requireAuth, (req, res) => {
+646:app.post('/api/hunts/:userId/calls', requireAuth, (req, res) => {
+684:app.put('/api/hunts/:userId', requireAuth, (req, res) => {
+704:app.get('/api/admin/hunts', requireAdmin, (req, res) => res.json(getAllHunts()));
+706:app.post('/api/admin/hunts/:userId/end', requireAdmin, (req, res) => {
+715:app.delete('/api/admin/hunts/:userId', requireAdmin, (req, res) => {
+723:app.delete('/api/admin/hunts/archived/:userId/:archivedAt', requireAdmin, (req, res) => {
+844:app.get('/api/settings', requireAuth, async (req, res) => {
+849:app.put('/api/settings', requireAuth, async (req, res) => {
+864:app.get('/api/settings/:userId', requireAuth, async (req, res) => {
+871:app.get('/api/settings/by-name/:name', requireAuth, async (req, res) => {
+919:app.post('/api/admin/set-rainbet-name', requireAdmin, async (req, res) => {
+989:app.post('/api/admin/set-user-field', requireAdmin, async (req, res) => {
+1026:app.post('/api/admin/set-preferred-slots', requireAdmin, async (req, res) => {
+1068:app.post('/api/tickets', async (req, res) => {
+1157:app.get('/api/bean-live', (req, res) => res.json(beanLive));
+1204:app.get('/api/leaderboard', async (req, res) => {
+1232:app.get('/api/discord/import-calls', requireAuth, async (req, res) => {
+1292:app.get('/api/discord/parse-winners', requireAuth, async (req, res) => {
+1517:app.get('/api/img-proxy', async (req, res) => {
+1548:app.get('/api/slots/search', async (req, res) => {
+1586:app.get('/api/health', (req, res) => res.json({ok:true}));
+1594:app.post('/api/hunts/:userId/request-calls', requireAuth, (req, res) => {
+1619:app.get('/api/hunts/:userId/call-requests', requireAuth, (req, res) => {
+1625:app.post('/api/hunts/:userId/call-requests/:requestId', requireAuth, (req, res) => {
+409:function emitHubUpdate()    { persistHunts(); io.emit('hub:update', getPublicHunts()); }
+410:function emitHuntUpdate(userId) { const h = hunts[userId]; if (h) { persistHunts(); io.to(`hunt:${userId}`).emit('hunt:update', h); } }
+566:  io.to(`hunt:${req.user.id}`).emit('hunt:update', hunts[req.user.id]);
+576:    io.to(`hunt:${req.user.id}`).emit('hunt:update', hunts[req.user.id]);
+616:  io.to(`hunt:${req.user.id}`).emit('hunt:update', hunts[req.user.id]);
+631:  io.to(`hunt:${req.user.id}`).emit('hunt:reinvite', { huntUserId: req.user.id });
+641:  io.to(`hunt:${req.user.id}`).emit('hunt:reinvite', { huntUserId: req.user.id });
+679:  io.to(`hunt:${req.params.userId}`).emit('hunt:update', hunt);
+698:  io.to(`hunt:${req.params.userId}`).emit('hunt:update', hunt);
+711:  emitHubUpdate(); io.to(`hunt:${req.params.userId}`).emit('hunt:update', h);
+1151:    io.emit('bean:live', beanLive);
+1614:  io.to(`hunt:${userId}`).emit('calls:request:new', { requests: huntCallRequests[userId] });
+1644:    io.to(`hunt:${userId}`).emit('calls:granted', { userId: reqItem.userId });
+1646:    io.to(`hunt:${userId}`).emit('calls:denied', { userId: reqItem.userId });
+1650:  io.to(`hunt:${userId}`).emit('calls:request:update', { requests: huntCallRequests[userId] });
+1659:  socket.on('watch:hub', () => {
+1661:    socket.emit('hub:update', getPublicHunts());
+1662:    socket.emit('bean:live', beanLive);
+1665:  socket.on('watch:hunt', userId => {
+1670:    if (h) socket.emit('hunt:update', h);
+1672:    socket.on('disconnect', () => {
+1679:  socket.on('leave:hunt', userId => {
+1686:  socket.on('identify', (userId) => {
