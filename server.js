@@ -377,6 +377,9 @@ function persistArchive() {
 }
 function archiveHunt(hunt) {
   if (!hunt || !hunt.user) return;
+  // Don't archive empty hunts — no bonuses means there's nothing to analyze,
+  // and it keeps the archive/history from filling up with blank entries.
+  if (!Array.isArray(hunt.bonuses) || hunt.bonuses.length === 0) return;
   // Save full hunt snapshot to archive (keep last 100)
   archive.unshift({ ...hunt, archivedAt: hunt.archivedAt || new Date().toISOString() });
   if (archive.length > 100) archive.splice(100);
@@ -518,8 +521,11 @@ app.post('/api/my-hunt/reset', requireAuth, (req, res) => {
     if (!hunts[req.user.id].archivedAt) hunts[req.user.id].archivedAt = new Date().toISOString();
     archiveHunt(hunts[req.user.id]);
   }
+  // Preserve the hunt type across a reset — resetting a VIP hunt should stay
+  // VIP (re-seeded with Bean), not silently demote to community.
+  const keepType = hunts[req.user.id]?.huntType === 'vip' ? 'vip' : 'community';
   hunts[req.user.id] = { user: req.user, isLive: false, startedAt: null, archivedAt: null,
-    huntType: 'community', bonuses: [], equity: [], calls: [], invitedEditors: [], callLimit: 10, huntMode: 'creating', roundRobin: true };
+    huntType: keepType, bonuses: [], equity: keepType==='vip'?[{id:'bean_auto',name:'Bean',amount:1000,isRollWinner:false}]:[], calls: [], invitedEditors: [], callLimit: 10, huntMode: 'creating', roundRobin: true };
   persistHunts();
   emitHubUpdate();
   res.json({ok:true});
