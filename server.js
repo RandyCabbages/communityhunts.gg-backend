@@ -18,6 +18,7 @@ const ALLOWED_ORIGINS = [
   ...new Set([
     FRONTEND_URL,
     'https://communityhunts.gg',
+    'https://www.communityhunts.gg',
     ...(process.env.EXTRA_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean),
   ])
 ];
