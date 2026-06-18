@@ -343,13 +343,30 @@ function huntSummary(h) {
     viewers: viewers[h.user.id]||0,
     huntMode: h.huntMode||'creating',
     rolledCount: (h.bonuses||[]).filter(b=>b.win>0).length,
+    // "Completed" == every bonus has been opened (a win recorded). Mirrors the frontend's
+    // allBonusesOpened. Drives the public Archived tab (completed-only) + the janitor.
+    completed: huntCompleted(h),
+    createdAt: h.createdAt || null, updatedAt: h.updatedAt || null,
   };
+}
+// A hunt is "completed" when it has bonuses and all of them have been opened (win recorded).
+function huntCompleted(h) {
+  return Array.isArray(h.bonuses) && h.bonuses.length > 0 && h.bonuses.every(b => +b.win > 0);
 }
 function tenantOf(h) { return h.tenantId || 'bean'; } // untagged hunts belong to Bean (back-compat)
 function inTenant(h, tenantId) { return tenantOf(h) === (tenantId || 'bean'); }
 function getPublicHunts(tenantId)   { return Object.values(hunts).filter(h=>h.isLive && inTenant(h,tenantId)).map(huntSummary); }
-function getArchivedHunts(tenantId) { return archive.filter(h=>inTenant(h,tenantId)).map(huntSummary); }
-function getAllHunts(tenantId)       { return Object.values(hunts).filter(h=>inTenant(h,tenantId)).map(huntSummary); }
+// Public Archived tab: only completed hunts (every bonus opened). Incomplete ended hunts are
+// hidden here — admins still see them in the All tab, and the janitor eventually reaps them.
+function getArchivedHunts(tenantId) { return archive.filter(h=>inTenant(h,tenantId) && huntCompleted(h)).map(huntSummary); }
+// Admin All tab: every hunt — created, live, and archived. Union of the current hunts (created/
+// live/ended) with archived snapshots whose hunt is no longer current, deduped by huntId.
+function getAllHunts(tenantId) {
+  const current = Object.values(hunts).filter(h=>inTenant(h,tenantId));
+  const seen = new Set(current.map(h=>h.huntId).filter(Boolean));
+  const archivedOnly = archive.filter(h=>inTenant(h,tenantId) && (!h.huntId || !seen.has(h.huntId)));
+  return [...current, ...archivedOnly].map(huntSummary);
+}
 function emitHubUpdate(tenantId)    { persistHunts(); io.to('hub:'+(tenantId||'bean')).emit('hub:update', getPublicHunts(tenantId)); }
 function emitHuntUpdate(userId) { const h = hunts[userId]; if (h) { persistHunts(); io.to(`hunt:${userId}`).emit('hunt:update', h); } }
 
@@ -359,6 +376,8 @@ function reqIsAdmin(req)   { return MULTI_TENANT ? tenants.isTenantAdmin(req.use
 function reqIsVipHost(req) { return MULTI_TENANT ? tenants.isTenantVip(req.user, req.tenant)   : (isAdmin(req.user)||isVipHost(req.user)); }
 function requireAdmin(req, res, next) { if (!req.user||!reqIsAdmin(req)) return res.status(403).json({error:'Admin only'}); next(); }
 function uid() { return Math.random().toString(36).slice(2, 8); }
+// Stamp a hunt's last-activity time so the stale-hunt janitor (cleanupStaleHunts) can measure idleness.
+function touch(userId) { const h = hunts[userId]; if (h) h.updatedAt = new Date().toISOString(); }
 
 // Reject malformed / oversized hunt payloads (memory + DoS protection).
 const MAX_BONUSES = 1000, MAX_EQUITY = 300, MAX_CALLS = 1000;
@@ -506,6 +525,7 @@ app.post('/api/my-hunt/start', requireAuth, (req, res) => {
   }
   hunts[req.user.id] = {
     user: req.user, huntId: uid(), isLive: false, startedAt: null, archivedAt: null, tenantId: req.tenant.id,
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
     huntType, bonuses: [], equity: initialEquity(huntType, req.user, req.tenant), calls: [], invitedEditors: [], callLimit: 10, huntMode: 'creating', roundRobin: true
   };
   persistHunts();
@@ -516,6 +536,7 @@ app.post('/api/my-hunt/golive', requireAuth, (req, res) => {
   if (!hunts[req.user.id]) return res.status(404).json({error:'No hunt'});
   hunts[req.user.id].isLive    = true;
   hunts[req.user.id].startedAt = new Date().toISOString();
+  hunts[req.user.id].updatedAt = new Date().toISOString();
   hunts[req.user.id].archivedAt= null;
   emitHubUpdate(req.tenant.id); // emitHubUpdate calls persistHunts
   io.to(`hunt:${req.user.id}`).emit('hunt:update', hunts[req.user.id]);
@@ -526,6 +547,7 @@ app.post('/api/my-hunt/end', requireAuth, (req, res) => {
   const h = hunts[req.user.id];
   if (h) {
     h.isLive = false;
+    h.updatedAt = new Date().toISOString();
     if (!h.huntId) h.huntId = uid();                       // backfill legacy hunts so the archive can dedupe
     if (!h.archivedAt) h.archivedAt = new Date().toISOString(); // stamp once — re-ending won't move it
     archiveHunt(h);                                         // upsert: refreshes the snapshot, never duplicates
@@ -542,6 +564,7 @@ app.post('/api/my-hunt/reopen', requireAuth, (req, res) => {
   if (!h) return res.status(404).json({error:'No hunt'});
   unarchiveHunt(h);
   h.isLive = true;
+  h.updatedAt = new Date().toISOString();
   h.archivedAt = null;
   if (!h.startedAt) h.startedAt = new Date().toISOString();
   emitHubUpdate(req.tenant.id);
@@ -559,6 +582,7 @@ app.post('/api/my-hunt/reset', requireAuth, (req, res) => {
   // VIP (re-seeded with Bean), not silently demote to community.
   const keepType = ['vip','solo'].includes(hunts[req.user.id]?.huntType) ? hunts[req.user.id].huntType : 'community';
   hunts[req.user.id] = { user: req.user, huntId: uid(), isLive: false, startedAt: null, archivedAt: null, tenantId: req.tenant.id,
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
     huntType: keepType, bonuses: [], equity: initialEquity(keepType, req.user, req.tenant), calls: [], invitedEditors: [], callLimit: 10, huntMode: 'creating', roundRobin: true };
   persistHunts();
   emitHubUpdate(req.tenant.id);
@@ -569,6 +593,7 @@ app.put('/api/my-hunt', requireAuth, (req, res) => {
   if (rejectBadHuntInput(req, res)) return;
   if (!hunts[req.user.id]) hunts[req.user.id] = {
     user: req.user, huntId: uid(), isLive: false, startedAt: null, archivedAt: null, tenantId: req.tenant.id,
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
     huntType: 'community', bonuses: [], equity: [], calls: [], invitedEditors: [], callLimit: 10
   };
   const { bonuses, equity, calls, huntType, callLimit, huntMode, roundRobin } = req.body;
@@ -583,6 +608,7 @@ app.put('/api/my-hunt', requireAuth, (req, res) => {
   if (callLimit  !== undefined) hunts[req.user.id].callLimit  = callLimit;
   if (huntMode   !== undefined) hunts[req.user.id].huntMode   = huntMode;
   if (roundRobin !== undefined) hunts[req.user.id].roundRobin = roundRobin;
+  touch(req.user.id);
   persistHunts();
   io.to(`hunt:${req.user.id}`).emit('hunt:update', hunts[req.user.id]);
   emitHubUpdate(req.tenant.id);
@@ -646,6 +672,7 @@ app.post('/api/hunts/:userId/calls', requireAuth, (req, res) => {
   const insertAt     = Math.min(3, pendingCalls.length);
   pendingCalls.splice(insertAt, 0, newCall);
   hunt.calls = [...pendingCalls, ...otherCalls];
+  hunt.updatedAt = new Date().toISOString();
   persistHunts();
   io.to(`hunt:${req.params.userId}`).emit('hunt:update', hunt);
   res.json({ok:true, call: newCall});
@@ -665,6 +692,7 @@ app.put('/api/hunts/:userId', requireAuth, (req, res) => {
   if (callLimit   !== undefined) hunt.callLimit   = callLimit;
   if (huntMode    !== undefined) hunt.huntMode    = huntMode;
   if (roundRobin  !== undefined) hunt.roundRobin  = roundRobin;
+  hunt.updatedAt = new Date().toISOString();
   persistHunts();
   io.to(`hunt:${req.params.userId}`).emit('hunt:update', hunt);
   emitHubUpdate(req.tenant.id);
@@ -673,6 +701,68 @@ app.put('/api/hunts/:userId', requireAuth, (req, res) => {
 
 // ── Admin ──────────────────────────────────────────────────────────
 app.get('/api/admin/hunts', requireAdmin, (req, res) => res.json(getAllHunts(req.tenant.id)));
+
+// ── Stale-hunt janitor ─────────────────────────────────────────────
+// Reap abandoned hunts after 36h of inactivity so the directory stays honest and storage bounded.
+// Idle is measured from updatedAt (created/live) or archivedAt (ended). Rules:
+//   • created, never went live     → delete
+//   • live, abandoned, has bonuses → auto-end + archive (kept as history)
+//   • live, abandoned, 0 bonuses   → delete (nothing worth keeping)
+//   • ended, incomplete            → delete (+ drop its archive snapshot)
+//   • ended/archived, completed    → keep
+const STALE_MS = 36 * 60 * 60 * 1000;
+function cleanupStaleHunts() {
+  const now = Date.now();
+  const idleMs = ts => now - new Date(ts || 0).getTime();
+  const affectedTenants = new Set();
+  const touchedRooms = [];
+  let huntsChanged = false, archiveChanged = false, deleted = 0, archivedN = 0;
+
+  // Object.entries snapshots the keys, so deleting during the loop is safe.
+  for (const [id, h] of Object.entries(hunts)) {
+    if (!h || !h.user) continue;
+    if (h.isLive) {
+      if (idleMs(h.updatedAt || h.startedAt) < STALE_MS) continue;
+      h.isLive = false;
+      h.updatedAt = new Date().toISOString();
+      if (Array.isArray(h.bonuses) && h.bonuses.length > 0) {
+        if (!h.archivedAt) h.archivedAt = new Date().toISOString();
+        archiveHunt(h); archivedN++;          // keep it as history
+      } else {
+        delete hunts[id]; deleted++;          // empty — nothing to archive
+      }
+      affectedTenants.add(tenantOf(h)); touchedRooms.push(id); huntsChanged = true;
+    } else if (h.archivedAt) {
+      if (huntCompleted(h) || idleMs(h.archivedAt) < STALE_MS) continue;
+      unarchiveHunt(h); delete hunts[id]; deleted++;   // incomplete + idle → drop from both maps
+      affectedTenants.add(tenantOf(h)); huntsChanged = true;
+    } else {
+      if (idleMs(h.updatedAt || h.createdAt) < STALE_MS) continue;
+      delete hunts[id]; deleted++;            // created but never run
+      affectedTenants.add(tenantOf(h)); huntsChanged = true;
+    }
+  }
+
+  // Orphan archive snapshots (hunt no longer current): drop incomplete + idle ones.
+  for (let i = archive.length - 1; i >= 0; i--) {
+    const h = archive[i];
+    if (huntCompleted(h) || idleMs(h.archivedAt) < STALE_MS) continue;
+    archive.splice(i, 1); deleted++;
+    affectedTenants.add(tenantOf(h)); archiveChanged = true;
+  }
+
+  if (huntsChanged) persistHunts();
+  if (archiveChanged) persistArchive();
+  affectedTenants.forEach(t => emitHubUpdate(t));
+  touchedRooms.forEach(id => io.to(`hunt:${id}`).emit('hunt:update', hunts[id] || { isLive:false, archivedAt:new Date().toISOString() }));
+  if (deleted || archivedN) console.log(`[janitor] swept stale hunts — ${deleted} deleted, ${archivedN} auto-archived`);
+  return { deleted, archived: archivedN };
+}
+// Run once after persistence settles, then hourly.
+setTimeout(cleanupStaleHunts, 30 * 1000);
+setInterval(cleanupStaleHunts, 60 * 60 * 1000);
+// Manual trigger for admins — used for verification and on-demand cleanup.
+app.post('/api/admin/hunts/cleanup', requireAdmin, (req, res) => res.json({ ok: true, ...cleanupStaleHunts() }));
 
 app.post('/api/admin/hunts/:userId/end', requireAdmin, (req, res) => {
   const h = hunts[req.params.userId];
