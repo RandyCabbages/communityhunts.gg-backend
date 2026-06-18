@@ -1062,6 +1062,26 @@ setTimeout(startPolling, 3000);
 
 app.get('/api/bean-live', (req, res) => res.json(integrations.getLiveStatus(req.tenant.slug)));
 
+// Active tenant's public branding — NO secrets (bot tokens, channel ids excluded).
+app.get('/api/tenant-config', (req, res) => {
+  const t = req.tenant;
+  res.json({
+    slug: t.slug, displayName: t.displayName,
+    branding: t.branding || {},
+    leaderboardUrl: !!t.leaderboardUrl,   // boolean: does a leaderboard exist?
+    twitchChannel: t.twitchChannel || null,
+  });
+});
+
+// Directory for the platform home — minimal public fields per tenant.
+app.get('/api/tenants', (req, res) => {
+  res.json(tenants.getAllTenants().filter(t => t.isActive).map(t => ({
+    slug: t.slug, displayName: t.displayName,
+    accent: (t.branding || {}).accent || null,
+    twitchChannel: t.twitchChannel || null,
+  })));
+});
+
 app.get('/api/leaderboard', async (req, res) => {
   try {
     res.json(await integrations.getLeaderboard(req.tenant));

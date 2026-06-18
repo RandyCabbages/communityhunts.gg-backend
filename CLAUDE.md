@@ -52,7 +52,9 @@ git revert <hash>          # safe way to undo a pushed commit — never force-pu
 ```
 server.js            ← routes, Socket.IO, auth, Passport (the bulk of the backend)
 lib/persistence.js   ← hunt/archive state + Postgres hunts_kv persistence
-lib/integrations.js  ← Twitch live status, beantwitch leaderboard proxy, Discord import/parse
+lib/integrations.js  ← per-tenant Twitch live status, leaderboard proxy, Discord import/parse
+lib/tenants.js       ← tenants + tenant_roles (config + admin/VIP), Bean seed, role helpers
+scripts/stamp-bean-tenant.js ← one-shot: stamp tenantId:'bean' on existing hunts (idempotent)
 package.json
 .env                 ← secrets (never commit)
 .env.example         ← config template
@@ -97,6 +99,33 @@ isAdmin(req.user) || VIP_HOSTS.includes(nameOf(req.user))
 - Because `isAdmin` is checked first at every VIP gate, the owner gets full admin + VIP access everywhere
 - **Never gate on display name** — it can change and locks people out (this broke access once)
 - To add more admins: set `ADMIN_IDS` env var in Railway with comma-separated Discord IDs
+
+## Multi-Tenancy (2026-06-18)
+
+The backend serves many isolated streamer communities. **Gated by `MULTI_TENANT` env var** —
+when unset/false, behavior is identical to single-tenant Bean (the default fallback everywhere).
+
+- **Config** lives in Postgres: `tenants` (slug, display name, twitch channel, discord bot token +
+  channel ids, leaderboard url, host discord id, branding JSONB) + `tenant_roles` (admin/vip by
+  Discord ID). Managed in `lib/tenants.js`; cached in memory; Bean row seeded from current env vars
+  (`ADMIN_IDS`/`VIP_IDS`/`DISCORD_*`) on startup so nobody loses access.
+- **Resolution:** `resolveTenant` middleware reads `X-Tenant-Slug` (header) or `?_tenant=` (query),
+  sets `req.tenant`. Defaults to `BEAN_TENANT` when the flag is off OR no slug is sent. Socket.IO
+  reads the slug from the handshake `?_tenant=` query.
+- **Three-tier auth:** `PLATFORM_OWNER_ID` (constant `135203806676779008`, admin on ALL tenants,
+  never in the DB) → tenant admin (`tenant_roles` role=admin) → tenant VIP (role=vip). Use
+  `reqIsAdmin(req)` / `reqIsVipHost(req)` in handlers — they resolve against `req.tenant` when the
+  flag is on, else the env globals. **Still ID-only, never display name.**
+- **Hunt isolation:** each hunt carries a `tenantId` field; `getPublicHunts/getAllHunts/getArchivedHunts(tenantId)`
+  filter by it; `tenantOf(h)` treats untagged hunts as `'bean'` (back-compat). Socket hub updates go to
+  the `hub:<slug>` room.
+- **Per-tenant integrations:** Twitch poll uses `tenant.twitchChannel`; Discord import/parse use the
+  tenant's bot token + channels; leaderboard uses `tenant.leaderboardUrl` (null → no panel).
+- **Public endpoints:** `GET /api/tenant-config` (active tenant branding, no secrets),
+  `GET /api/tenants` (directory list).
+- **Rollout:** deploy with `MULTI_TENANT` unset (no-op). Run `scripts/stamp-bean-tenant.js` once.
+  Flip `MULTI_TENANT=true` only once the frontend sends `X-Tenant-Slug` (it already does). Add a
+  tenant by inserting a `tenants` row + `tenant_roles`; no code change needed.
 
 ## Key API Endpoints
 
