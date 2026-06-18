@@ -311,7 +311,7 @@ const viewers = {};
 // Persistence layer (hunt/archive state + Postgres hunts_kv) lives in lib/persistence.js.
 // hunts/archive are shared singletons owned there — imported by reference, never reassigned.
 const persistence = require('./lib/persistence');
-const { hunts, archive, persistHunts, persistArchive, archiveHunt } = persistence;
+const { hunts, archive, persistHunts, persistArchive, archiveHunt, unarchiveHunt } = persistence;
 persistence.initPersistence({ pgPool, normalizeSlot })
   .then(() => startupBackfill())
   .catch(e => console.error('[persist] init error:', e.message));
@@ -505,7 +505,7 @@ app.post('/api/my-hunt/start', requireAuth, (req, res) => {
     archiveHunt(hunts[req.user.id]);
   }
   hunts[req.user.id] = {
-    user: req.user, isLive: false, startedAt: null, archivedAt: null, tenantId: req.tenant.id,
+    user: req.user, huntId: uid(), isLive: false, startedAt: null, archivedAt: null, tenantId: req.tenant.id,
     huntType, bonuses: [], equity: initialEquity(huntType, req.user, req.tenant), calls: [], invitedEditors: [], callLimit: 10, huntMode: 'creating', roundRobin: true
   };
   persistHunts();
@@ -523,13 +523,29 @@ app.post('/api/my-hunt/golive', requireAuth, (req, res) => {
 });
 
 app.post('/api/my-hunt/end', requireAuth, (req, res) => {
-  if (hunts[req.user.id]) {
-    hunts[req.user.id].isLive    = false;
-    hunts[req.user.id].archivedAt= new Date().toISOString();
-    archiveHunt(hunts[req.user.id]);
+  const h = hunts[req.user.id];
+  if (h) {
+    h.isLive = false;
+    if (!h.huntId) h.huntId = uid();                       // backfill legacy hunts so the archive can dedupe
+    if (!h.archivedAt) h.archivedAt = new Date().toISOString(); // stamp once — re-ending won't move it
+    archiveHunt(h);                                         // upsert: refreshes the snapshot, never duplicates
     emitHubUpdate(req.tenant.id);
-    io.to(`hunt:${req.user.id}`).emit('hunt:update', hunts[req.user.id]);
+    io.to(`hunt:${req.user.id}`).emit('hunt:update', h);
   }
+  res.json({ok:true});
+});
+
+// Reopen a hunt ended by mistake: flip it back to live and pull its snapshot out of the
+// archive, so history never keeps a copy of a hunt that's running again.
+app.post('/api/my-hunt/reopen', requireAuth, (req, res) => {
+  const h = hunts[req.user.id];
+  if (!h) return res.status(404).json({error:'No hunt'});
+  unarchiveHunt(h);
+  h.isLive = true;
+  h.archivedAt = null;
+  if (!h.startedAt) h.startedAt = new Date().toISOString();
+  emitHubUpdate(req.tenant.id);
+  io.to(`hunt:${req.user.id}`).emit('hunt:update', h);
   res.json({ok:true});
 });
 
@@ -542,7 +558,7 @@ app.post('/api/my-hunt/reset', requireAuth, (req, res) => {
   // Preserve the hunt type across a reset — resetting a VIP hunt should stay
   // VIP (re-seeded with Bean), not silently demote to community.
   const keepType = ['vip','solo'].includes(hunts[req.user.id]?.huntType) ? hunts[req.user.id].huntType : 'community';
-  hunts[req.user.id] = { user: req.user, isLive: false, startedAt: null, archivedAt: null, tenantId: req.tenant.id,
+  hunts[req.user.id] = { user: req.user, huntId: uid(), isLive: false, startedAt: null, archivedAt: null, tenantId: req.tenant.id,
     huntType: keepType, bonuses: [], equity: initialEquity(keepType, req.user, req.tenant), calls: [], invitedEditors: [], callLimit: 10, huntMode: 'creating', roundRobin: true };
   persistHunts();
   emitHubUpdate(req.tenant.id);
@@ -552,7 +568,7 @@ app.post('/api/my-hunt/reset', requireAuth, (req, res) => {
 app.put('/api/my-hunt', requireAuth, (req, res) => {
   if (rejectBadHuntInput(req, res)) return;
   if (!hunts[req.user.id]) hunts[req.user.id] = {
-    user: req.user, isLive: false, startedAt: null, archivedAt: null, tenantId: req.tenant.id,
+    user: req.user, huntId: uid(), isLive: false, startedAt: null, archivedAt: null, tenantId: req.tenant.id,
     huntType: 'community', bonuses: [], equity: [], calls: [], invitedEditors: [], callLimit: 10
   };
   const { bonuses, equity, calls, huntType, callLimit, huntMode, roundRobin } = req.body;
@@ -661,8 +677,20 @@ app.get('/api/admin/hunts', requireAdmin, (req, res) => res.json(getAllHunts(req
 app.post('/api/admin/hunts/:userId/end', requireAdmin, (req, res) => {
   const h = hunts[req.params.userId];
   if (!h) return res.status(404).json({error:'Not found'});
-  h.isLive = false; h.archivedAt = new Date().toISOString();
+  h.isLive = false;
+  if (!h.huntId) h.huntId = uid();
+  if (!h.archivedAt) h.archivedAt = new Date().toISOString();
   archiveHunt(h);
+  emitHubUpdate(req.tenant.id); io.to(`hunt:${req.params.userId}`).emit('hunt:update', h);
+  res.json({ok:true});
+});
+
+app.post('/api/admin/hunts/:userId/reopen', requireAdmin, (req, res) => {
+  const h = hunts[req.params.userId];
+  if (!h) return res.status(404).json({error:'Not found'});
+  unarchiveHunt(h);
+  h.isLive = true; h.archivedAt = null;
+  if (!h.startedAt) h.startedAt = new Date().toISOString();
   emitHubUpdate(req.tenant.id); io.to(`hunt:${req.params.userId}`).emit('hunt:update', h);
   res.json({ok:true});
 });
