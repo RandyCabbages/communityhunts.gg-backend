@@ -471,6 +471,13 @@ app.post('/api/my-hunt/start', requireAuth, (req, res) => {
   const { huntType = 'community' } = req.body;
   if (huntType === 'vip' && !isAdmin(req.user) && !isVipHost(req.user))
     return res.status(403).json({error:'Not authorised for VIP hunts'});
+  // One active hunt per user: block a new hunt while the current one is still
+  // live or has progress (bonuses/calls). The user must End or Reset it first.
+  // An ended hunt (archivedAt set) or an empty fresh shell can be replaced.
+  const current = hunts[req.user.id];
+  if (current && !current.archivedAt && (current.isLive || current.bonuses?.length > 0 || current.calls?.length > 0)) {
+    return res.status(409).json({ error: 'You already have an active hunt. End or reset it before starting a new one.' });
+  }
   // Archive previous hunt if it had any bonuses
   if (hunts[req.user.id] && hunts[req.user.id].bonuses?.length > 0) {
     if (!hunts[req.user.id].archivedAt) hunts[req.user.id].archivedAt = new Date().toISOString();
