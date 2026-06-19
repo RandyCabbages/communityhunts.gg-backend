@@ -87,9 +87,14 @@ function verifyToken(token) {
     return payload;
   } catch(e) { return null; }
 }
-function canEditHunt(user, huntOwnerId) {
+// Takes `req` (not bare user) so admin status resolves through reqIsAdmin — the SAME
+// authority used by /auth/me, requireAdmin, and the admin tabs (platform owner + tenant
+// admins + env ADMIN_IDS). Using bare isAdmin(user) here was the bug: the nav showed the
+// owner as admin while every hunt they didn't own stayed read-only.
+function canEditHunt(req, huntOwnerId) {
+  const user = req?.user;
   if (!user) return false;
-  if (isAdmin(user)) return true;
+  if (reqIsAdmin(req)) return true;
   if (user.id === huntOwnerId) return true;
   const hunt = hunts[huntOwnerId];
   if (!hunt) return false;
@@ -453,9 +458,9 @@ app.get('/api/hunts/:userId/archived/:archivedAt', (req, res) => {
 app.get('/api/hunts/:userId', (req, res) => {
   const hunt = hunts[req.params.userId];
   if (!hunt) return res.status(404).json({error:'Hunt not found'});
-  if (!hunt.isLive && !hunt.archivedAt && !(req.user && canEditHunt(req.user, req.params.userId)))
+  if (!hunt.isLive && !hunt.archivedAt && !(req.user && canEditHunt(req, req.params.userId)))
     return res.status(404).json({error:'Hunt not live'});
-  const canEdit  = req.user ? canEditHunt(req.user, req.params.userId) : false;
+  const canEdit  = req.user ? canEditHunt(req, req.params.userId) : false;
 
   // Auto-link: when a logged-in viewer visits, match their Discord name to an equity entry and store their Discord ID
   // This makes subsequent isEquityMember checks use the reliable ID-based path
@@ -694,10 +699,10 @@ function addCallToHunt(hunt, user, slot, isEditor) {
 app.post('/api/hunts/:userId/calls', requireAuth, (req, res) => {
   const hunt = hunts[req.params.userId];
   if (!hunt) return res.status(404).json({error:'Hunt not found'});
-  if (!canEditHunt(req.user, req.params.userId) && !isEquityMember(req.user, req.params.userId))
+  if (!canEditHunt(req, req.params.userId) && !isEquityMember(req.user, req.params.userId))
     return res.status(403).json({error:'Not an equity member'});
 
-  const isEditor = canEditHunt(req.user, req.params.userId);
+  const isEditor = canEditHunt(req, req.params.userId);
   const result = addCallToHunt(hunt, req.user, req.body.slot, isEditor);
   if (result.error) return res.status(result.status).json({error: result.error});
   res.json({ok:true, call: result.call});
@@ -712,7 +717,7 @@ app.post('/api/hunts/:userId/public-calls', requireAuth, (req, res) => {
     return res.status(403).json({error:'Incorrect PIN'});
 
   // Owners/admins/editors keep their exemptions; everyone else is a limited submitter.
-  const isEditor = canEditHunt(req.user, req.params.userId);
+  const isEditor = canEditHunt(req, req.params.userId);
   const result = addCallToHunt(hunt, req.user, req.body.slot, isEditor);
   if (result.error) return res.status(result.status).json({error: result.error});
   res.json({ok:true, call: result.call});
@@ -720,7 +725,7 @@ app.post('/api/hunts/:userId/public-calls', requireAuth, (req, res) => {
 
 // ── Edit any hunt (admin/editor) ───────────────────────────────────
 app.put('/api/hunts/:userId', requireAuth, (req, res) => {
-  if (!canEditHunt(req.user, req.params.userId)) return res.status(403).json({error:'Not authorised'});
+  if (!canEditHunt(req, req.params.userId)) return res.status(403).json({error:'Not authorised'});
   const hunt = hunts[req.params.userId];
   if (!hunt) return res.status(404).json({error:'Hunt not found'});
   if (rejectBadHuntInput(req, res)) return;
