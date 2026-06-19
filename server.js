@@ -545,7 +545,7 @@ app.post('/api/my-hunt/start', requireAuth, (req, res) => {
   hunts[req.user.id] = {
     user: req.user, huntId: uid(), isLive: false, startedAt: null, archivedAt: null, tenantId: req.tenant.id,
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
-    huntType, bonuses: [], equity: initialEquity(huntType, req.user, req.tenant), calls: [], invitedEditors: [], callLimit: 10, huntMode: 'creating', roundRobin: true, currency: 'USD', publicCalls: false, publicCallsPin: null
+    huntType, bonuses: [], equity: initialEquity(huntType, req.user, req.tenant), calls: [], invitedEditors: [], callLimit: huntType === 'solo' ? 0 : 10, huntMode: 'creating', roundRobin: true, currency: 'USD', publicCalls: false, publicCallsPin: null
   };
   persistHunts();
   res.json({ok:true});
@@ -602,7 +602,7 @@ app.post('/api/my-hunt/reset', requireAuth, (req, res) => {
   const keepType = ['vip','solo'].includes(hunts[req.user.id]?.huntType) ? hunts[req.user.id].huntType : 'community';
   hunts[req.user.id] = { user: req.user, huntId: uid(), isLive: false, startedAt: null, archivedAt: null, tenantId: req.tenant.id,
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
-    huntType: keepType, bonuses: [], equity: initialEquity(keepType, req.user, req.tenant), calls: [], invitedEditors: [], callLimit: 10, huntMode: 'creating', roundRobin: true, currency: 'USD', publicCalls: false, publicCallsPin: null };
+    huntType: keepType, bonuses: [], equity: initialEquity(keepType, req.user, req.tenant), calls: [], invitedEditors: [], callLimit: keepType === 'solo' ? 0 : 10, huntMode: 'creating', roundRobin: true, currency: 'USD', publicCalls: false, publicCallsPin: null };
   persistHunts();
   emitHubUpdate(req.tenant.id);
   res.json({ok:true});
