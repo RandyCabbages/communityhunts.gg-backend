@@ -34,8 +34,10 @@ const SESSION_SECRET = process.env.SESSION_SECRET || (() => {
   console.warn('[security] SESSION_SECRET is not set — using a random per-boot secret. Set SESSION_SECRET in the environment so sessions/tokens survive restarts and cannot be forged with a known default.');
   return require('crypto').randomBytes(48).toString('hex');
 })();
-const ADMIN_IDS      = (process.env.ADMIN_IDS || '').split(',').map(s=>s.trim()).filter(Boolean);
-const VIP_IDS        = (process.env.VIP_IDS || '').split(',').map(s=>s.trim()).filter(Boolean);
+// Set() dedups so a repeated entry in the Railway var (e.g. an ID appended twice)
+// doesn't render the same admin twice in the platform-admins list.
+const ADMIN_IDS      = [...new Set((process.env.ADMIN_IDS || '').split(',').map(s=>s.trim()).filter(Boolean))];
+const VIP_IDS        = [...new Set((process.env.VIP_IDS || '').split(',').map(s=>s.trim()).filter(Boolean))];
 const TICKET_EMAILS = (process.env.TICKET_EMAILS || 'nesgoomba@gmail.com,luimeneghim@gmail.com').split(',').map(s=>s.trim()).filter(Boolean);
 const RESEND_API_KEY = (process.env.RESEND_API_KEY || '').trim();
 const TICKET_FROM = (process.env.TICKET_FROM || 'CommunityHunts Tickets <onboarding@resend.dev>').trim();
