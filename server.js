@@ -1270,6 +1270,85 @@ async function resolveUserIdByName(name) {
   return match ? match.userId : null;
 }
 
+// GET /api/admin/users — list users in the CURRENT tenant (community_members ⨝ known_users ⨝ user_settings).
+// Tenant-scoped: a community admin only sees their own community's members.
+app.get('/api/admin/users', requireAuth, requireAdmin, async (req, res) => {
+  if (!pgPool) return res.json({ users: [], total: 0 });
+  const tenantId = req.tenant?.id || 'bean';
+  const q = String(req.query.q || '').trim().toLowerCase();
+  const limit = Math.min(parseInt(req.query.limit, 10) || 50, 200);
+  const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+  try {
+    const params = [tenantId];
+    let where = `cm.tenant_id = $1`;
+    if (q) {
+      params.push(`%${q}%`);
+      where += ` AND (LOWER(ku.display_name) LIKE $${params.length}
+                   OR LOWER(ku.username) LIKE $${params.length}
+                   OR ku.user_id LIKE $${params.length})`;
+    }
+    params.push(limit, offset);
+    const sql = `
+      SELECT ku.user_id, ku.display_name, ku.username, ku.avatar, ku.last_seen,
+             us.settings
+      FROM community_members cm
+      JOIN known_users ku ON ku.user_id = cm.user_id
+      LEFT JOIN user_settings us ON us.user_id = cm.user_id
+      WHERE ${where}
+      ORDER BY ku.last_seen DESC NULLS LAST
+      LIMIT $${params.length - 1} OFFSET $${params.length}`;
+    const r = await pgPool.query(sql, params);
+    const users = r.rows.map(row => {
+      const s = row.settings || {};
+      return {
+        id: row.user_id, displayName: row.display_name, username: row.username,
+        avatar: row.avatar, lastSeen: row.last_seen,
+        rainbetName: s.rainbetName || null, twitchName: s.twitchName || null,
+        slotPickCount: Array.isArray(s.preferredSlots) ? s.preferredSlots.length : 0,
+      };
+    });
+    res.json({ users });
+  } catch (e) {
+    console.error('[admin] users list failed:', e.message);
+    res.status(500).json({ error: 'Failed to list users' });
+  }
+});
+
+// GET /api/admin/users/:userId — one user's full profile. Tenant-guarded: 404 unless the target
+// is a member of req.tenant — UNLESS the caller is a platform admin (who may inspect anyone).
+app.get('/api/admin/users/:userId', requireAuth, requireAdmin, async (req, res) => {
+  const userId = String(req.params.userId);
+  const tenantId = req.tenant?.id || 'bean';
+  const platform = isPlatformAdmin(req.user);
+  try {
+    if (pgPool && !platform) {
+      const m = await pgPool.query(
+        'SELECT 1 FROM community_members WHERE user_id=$1 AND tenant_id=$2', [userId, tenantId]);
+      if (m.rowCount === 0) return res.status(404).json({ error: 'User not in this community' });
+    }
+    let identity = { id: userId, displayName: null, username: null, avatar: null, lastSeen: null };
+    if (pgPool) {
+      const r = await pgPool.query(
+        'SELECT display_name, username, avatar, last_seen FROM known_users WHERE user_id=$1', [userId]);
+      if (r.rows[0]) identity = {
+        id: userId, displayName: r.rows[0].display_name, username: r.rows[0].username,
+        avatar: r.rows[0].avatar, lastSeen: r.rows[0].last_seen };
+    }
+    const settings = await getSettings(userId); // existing helper
+    const communities = await memberships.getUserCommunities(userId);
+    res.json({
+      ...identity,
+      rainbetName: settings.rainbetName || null,
+      twitchName: settings.twitchName || null,
+      preferredSlots: Array.isArray(settings.preferredSlots) ? settings.preferredSlots : [],
+      communities,
+    });
+  } catch (e) {
+    console.error('[admin] user profile failed:', e.message);
+    res.status(500).json({ error: 'Failed to load user' });
+  }
+});
+
 // POST /api/admin/set-user-field — let an admin manually set a per-user identity field
 // (rainbetName or twitchName) for someone else. Accepts either { userId, field, value } or
 // { name, field, value }. Name-only path first tries to resolve to an existing settings row
