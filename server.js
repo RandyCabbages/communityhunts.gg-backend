@@ -255,7 +255,7 @@ app.get('/auth/discord/callback',
     const userData = Buffer.from(JSON.stringify({
       id: req.user.id, username: req.user.username,
       displayName: req.user.displayName, avatar: req.user.avatar,
-      isAdmin: reqIsAdmin(req), isVipHost: reqIsVipHost(req)
+      isAdmin: reqIsAdmin(req), isVipHost: reqIsVipHost(req), isPlatformAdmin: isPlatformAdmin(req.user)
     })).toString('base64');
     const returnTo = req.session.returnTo || '/';
     delete req.session.returnTo;
@@ -274,7 +274,7 @@ app.get('/auth/me', (req, res) => {
   // Auto-attribute to the community they're browsing (Bean by default) — idempotent, so a
   // returning user keeps their original join date and this just no-ops after the first time.
   memberships.joinCommunity(req.user.id, req.tenant.id).catch(() => {});
-  res.json({ user: { ...req.user, isAdmin: reqIsAdmin(req), isVipHost: reqIsVipHost(req) } });
+  res.json({ user: { ...req.user, isAdmin: reqIsAdmin(req), isVipHost: reqIsVipHost(req), isPlatformAdmin: isPlatformAdmin(req.user) } });
 });
 
 // Public list of known users for equity-name autocomplete.
@@ -397,7 +397,7 @@ function reqIsAdmin(req) {
   if (isPlatformAdmin(req.user)) return true;               // owner + env + DB → admin everywhere
   return MULTI_TENANT ? tenants.isTenantAdmin(req.user, req.tenant) : false;
 }
-function reqIsVipHost(req) { return MULTI_TENANT ? tenants.isTenantVip(req.user, req.tenant)   : (isAdmin(req.user)||isVipHost(req.user)); }
+function reqIsVipHost(req) { if (isPlatformAdmin(req.user)) return true; return MULTI_TENANT ? tenants.isTenantVip(req.user, req.tenant) : (isAdmin(req.user)||isVipHost(req.user)); }
 function requireAdmin(req, res, next) { if (!req.user||!reqIsAdmin(req)) return res.status(403).json({error:'Admin only'}); next(); }
 function requirePlatformAdmin(req, res, next) {
   if (!req.user || !isPlatformAdmin(req.user)) return res.status(403).json({error:'Platform admin only'});
@@ -868,6 +868,35 @@ app.put('/api/hunts/:userId', requireAuth, (req, res) => {
 // ── Admin ──────────────────────────────────────────────────────────
 app.get('/api/admin/hunts', requireAdmin, (req, res) => res.json(getAllHunts(req.tenant.id)));
 
+// Lightweight dashboard counts for the current tenant.
+app.get('/api/admin/overview', requireAuth, requireAdmin, async (req, res) => {
+  const tenantId = req.tenant?.id || 'bean';
+  let userCount = 0, recentLogins = [];
+  if (pgPool) {
+    try {
+      const c = await pgPool.query(
+        'SELECT COUNT(*)::int AS n FROM community_members WHERE tenant_id=$1', [tenantId]);
+      userCount = c.rows[0]?.n || 0;
+      const r = await pgPool.query(`
+        SELECT ku.user_id, ku.display_name, ku.avatar, ku.last_seen
+        FROM community_members cm JOIN known_users ku ON ku.user_id = cm.user_id
+        WHERE cm.tenant_id=$1 ORDER BY ku.last_seen DESC NULLS LAST LIMIT 10`, [tenantId]);
+      recentLogins = r.rows.map(u => ({
+        id: u.user_id, displayName: u.display_name, avatar: u.avatar, lastSeen: u.last_seen }));
+    } catch (e) { console.error('[admin] overview failed:', e.message); }
+  }
+  // getAllHunts returns all hunts (live + created + archived snapshots) for the tenant.
+  // getArchivedHunts returns only completed archived hunts for the tenant.
+  const allTenantHunts = getAllHunts(tenantId);
+  const activeHuntCount = allTenantHunts.filter(h => h.isLive && !h.archivedAt).length;
+  const archivedHuntCount = getArchivedHunts(tenantId).length;
+  res.json({
+    communityName: req.tenant?.displayName || 'Bean',
+    userCount, activeHuntCount, archivedHuntCount,
+    recentLogins,
+  });
+});
+
 // ── Platform-admin management ──────────────────────────────────────
 // List all platform admins with their source (owner | env | db) for the UI.
 app.get('/api/admin/platform-admins', requireAuth, requirePlatformAdmin, async (req, res) => {
@@ -1273,7 +1302,7 @@ async function resolveUserIdByName(name) {
 // GET /api/admin/users — list users in the CURRENT tenant (community_members ⨝ known_users ⨝ user_settings).
 // Tenant-scoped: a community admin only sees their own community's members.
 app.get('/api/admin/users', requireAuth, requireAdmin, async (req, res) => {
-  if (!pgPool) return res.json({ users: [], total: 0 });
+  if (!pgPool) return res.json({ users: [] });
   const tenantId = req.tenant?.id || 'bean';
   const q = String(req.query.q || '').trim().toLowerCase();
   const limit = Math.min(parseInt(req.query.limit, 10) || 50, 200);
