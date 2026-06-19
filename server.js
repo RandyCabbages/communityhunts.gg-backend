@@ -371,14 +371,14 @@ function huntCompleted(h) {
 }
 function tenantOf(h) { return h.tenantId || 'bean'; } // untagged hunts belong to Bean (back-compat)
 function inTenant(h, tenantId) { return tenantOf(h) === (tenantId || 'bean'); }
-function getPublicHunts(tenantId)   { return Object.values(hunts).filter(h=>h.isLive && inTenant(h,tenantId) && h.user?.id !== MOD_HUNT_ID).map(huntSummary); }
+function getPublicHunts(tenantId)   { return Object.values(hunts).filter(h=>h.isLive && inTenant(h,tenantId) && h.user?.id !== MOD_HUNT_ID && h.user?.id !== AFFILIATE_HUNT_ID).map(huntSummary); }
 // Public Archived tab: only completed hunts (every bonus opened). Incomplete ended hunts are
 // hidden here — admins still see them in the All tab, and the janitor eventually reaps them.
 function getArchivedHunts(tenantId) { return archive.filter(h=>inTenant(h,tenantId) && huntCompleted(h)).map(huntSummary); }
 // Admin All tab: every hunt — created, live, and archived. Union of the current hunts (created/
 // live/ended) with archived snapshots whose hunt is no longer current, deduped by huntId.
 function getAllHunts(tenantId) {
-  const current = Object.values(hunts).filter(h=>inTenant(h,tenantId) && h.user?.id !== MOD_HUNT_ID);
+  const current = Object.values(hunts).filter(h=>inTenant(h,tenantId) && h.user?.id !== MOD_HUNT_ID && h.user?.id !== AFFILIATE_HUNT_ID);
   const seen = new Set(current.map(h=>h.huntId).filter(Boolean));
   const archivedOnly = archive.filter(h=>inTenant(h,tenantId) && (!h.huntId || !seen.has(h.huntId)));
   return [...current, ...archivedOnly].map(huntSummary);
@@ -408,6 +408,7 @@ function requirePlatformAdmin(req, res, next) {
 
 // ── Mod hunt access ───────────────────────────────────────────────
 const MOD_HUNT_ID = '__mod_hunt__';
+const AFFILIATE_HUNT_ID = '__affiliate_hunt__';
 const MOD_HUNT_ALLOWED_IDS = new Set([
   '135203806676779008',   // Bean
   '158594379773247489',   // Missingiscool
@@ -788,6 +789,107 @@ app.post('/api/mod-hunt/reset', requireModHuntAccess, (req, res) => {
 app.get('/api/mod-hunt/history', requireModHuntAccess, (req, res) => {
   const modArchived = archive.filter(h => h.user?.id === MOD_HUNT_ID);
   res.json(modArchived.map(h => ({
+    archivedAt: h.archivedAt,
+    bonuses: h.bonuses || [],
+    equity: h.equity || [],
+    huntMode: h.huntMode,
+    startedAt: h.startedAt,
+    createdAt: h.createdAt,
+    totalWon: (h.bonuses || []).reduce((s, b) => s + (b.win || 0), 0),
+    totalBet: (h.bonuses || []).reduce((s, b) => s + (b.bet || 0), 0),
+    bonusCount: (h.bonuses || []).length,
+  })));
+});
+
+// ── Affiliate hunt — VIP-style hunt for Bean with $50 roll winners ──
+function emptyAffiliateHunt(tenantId) {
+  return {
+    user: { id: AFFILIATE_HUNT_ID, displayName: 'Bean', avatar: null },
+    huntId: uid(), isLive: false, startedAt: null, archivedAt: null,
+    tenantId: tenantId || 'bean',
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    huntType: 'vip', bonuses: [],
+    equity: [
+      { id: 'bean_auto', name: 'Bean', amount: 1000, isRollWinner: false },
+    ],
+    calls: [], invitedEditors: [], callLimit: 10, huntMode: 'creating',
+    roundRobin: true, currency: 'USD', publicCalls: false, publicCallsPin: null,
+  };
+}
+
+app.get('/api/affiliate-hunt', requireModHuntAccess, (req, res) => {
+  res.json(hunts[AFFILIATE_HUNT_ID] || null);
+});
+
+app.put('/api/affiliate-hunt', requireModHuntAccess, (req, res) => {
+  if (rejectBadHuntInput(req, res)) return;
+  if (!hunts[AFFILIATE_HUNT_ID]) hunts[AFFILIATE_HUNT_ID] = emptyAffiliateHunt(req.tenant.id);
+  const { bonuses, equity, calls, callLimit, huntMode, roundRobin, currency, currentSlot } = req.body;
+  if (bonuses    !== undefined) hunts[AFFILIATE_HUNT_ID].bonuses    = bonuses;
+  if (equity     !== undefined) hunts[AFFILIATE_HUNT_ID].equity     = equity;
+  if (calls      !== undefined) hunts[AFFILIATE_HUNT_ID].calls      = calls;
+  if (callLimit  !== undefined) hunts[AFFILIATE_HUNT_ID].callLimit  = callLimit;
+  if (huntMode   !== undefined) hunts[AFFILIATE_HUNT_ID].huntMode   = huntMode;
+  if (roundRobin !== undefined) hunts[AFFILIATE_HUNT_ID].roundRobin = roundRobin;
+  if (currency   !== undefined) hunts[AFFILIATE_HUNT_ID].currency   = currency;
+  if (currentSlot !== undefined) hunts[AFFILIATE_HUNT_ID].currentSlot = currentSlot;
+  hunts[AFFILIATE_HUNT_ID].huntType = 'vip';
+  touch(AFFILIATE_HUNT_ID);
+  persistHunts();
+  io.to(`hunt:${AFFILIATE_HUNT_ID}`).emit('hunt:update', publicHuntView(hunts[AFFILIATE_HUNT_ID]));
+  res.json({ ok: true });
+});
+
+app.post('/api/affiliate-hunt/golive', requireModHuntAccess, (req, res) => {
+  if (!hunts[AFFILIATE_HUNT_ID]) hunts[AFFILIATE_HUNT_ID] = emptyAffiliateHunt(req.tenant.id);
+  hunts[AFFILIATE_HUNT_ID].isLive     = true;
+  hunts[AFFILIATE_HUNT_ID].startedAt  = new Date().toISOString();
+  hunts[AFFILIATE_HUNT_ID].updatedAt  = new Date().toISOString();
+  hunts[AFFILIATE_HUNT_ID].archivedAt = null;
+  persistHunts();
+  io.to(`hunt:${AFFILIATE_HUNT_ID}`).emit('hunt:update', publicHuntView(hunts[AFFILIATE_HUNT_ID]));
+  res.json({ ok: true });
+});
+
+app.post('/api/affiliate-hunt/end', requireModHuntAccess, (req, res) => {
+  const h = hunts[AFFILIATE_HUNT_ID];
+  if (h) {
+    h.isLive = false;
+    h.updatedAt = new Date().toISOString();
+    if (!h.archivedAt) h.archivedAt = new Date().toISOString();
+    persistHunts();
+    io.to(`hunt:${AFFILIATE_HUNT_ID}`).emit('hunt:update', publicHuntView(h));
+  }
+  res.json({ ok: true });
+});
+
+app.post('/api/affiliate-hunt/reopen', requireModHuntAccess, (req, res) => {
+  const h = hunts[AFFILIATE_HUNT_ID];
+  if (!h) return res.status(404).json({ error: 'No affiliate hunt' });
+  h.isLive = true;
+  h.updatedAt = new Date().toISOString();
+  h.archivedAt = null;
+  if (!h.startedAt) h.startedAt = new Date().toISOString();
+  persistHunts();
+  io.to(`hunt:${AFFILIATE_HUNT_ID}`).emit('hunt:update', publicHuntView(h));
+  res.json({ ok: true });
+});
+
+app.post('/api/affiliate-hunt/reset', requireModHuntAccess, (req, res) => {
+  const old = hunts[AFFILIATE_HUNT_ID];
+  if (old && Array.isArray(old.bonuses) && old.bonuses.length > 0) {
+    if (!old.archivedAt) old.archivedAt = new Date().toISOString();
+    archiveHunt(old);
+  }
+  hunts[AFFILIATE_HUNT_ID] = emptyAffiliateHunt(req.tenant.id);
+  persistHunts();
+  io.to(`hunt:${AFFILIATE_HUNT_ID}`).emit('hunt:update', publicHuntView(hunts[AFFILIATE_HUNT_ID]));
+  res.json({ ok: true });
+});
+
+app.get('/api/affiliate-hunt/history', requireModHuntAccess, (req, res) => {
+  const affArchived = archive.filter(h => h.user?.id === AFFILIATE_HUNT_ID);
+  res.json(affArchived.map(h => ({
     archivedAt: h.archivedAt,
     bonuses: h.bonuses || [],
     equity: h.equity || [],
