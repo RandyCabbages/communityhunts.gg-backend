@@ -552,7 +552,8 @@ app.get('/api/my-hunt', requireAuth, (req, res) => res.json(hunts[req.user.id] |
 
 // Seed equity when a hunt is created/reset: VIP starts with Bean, solo with
 // just the runner, community empty.
-function initialEquity(huntType, user, tenant) {
+function initialEquity(huntType, user, tenant, balance) {
+  const userName = user?.displayName || user?.username || '';
   if (huntType === 'vip') {
     const b = (tenant && tenant.branding) || {};
     const hostName = b.hostName || 'Bean';
@@ -560,15 +561,20 @@ function initialEquity(huntType, user, tenant) {
     // Interim id: keep 'bean_auto' for the Bean tenant so the live frontend's crown logic
     // is unaffected until the frontend keys the crown off discordId/crownDiscordId.
     const id = (tenant && tenant.slug && tenant.slug !== 'bean') ? `host_auto:${tenant.slug}` : 'bean_auto';
-    return [{ id, discordId: hostId, name: hostName, amount: 1000, isRollWinner: false }];
+    return [{ id, discordId: hostId, name: hostName, amount: balance != null ? balance : 1000, isRollWinner: false }];
   }
-  if (huntType === 'solo') return [{id:'creator_auto',name:(user?.displayName||user?.username||''),amount:0,isRollWinner:false}];
+  if (huntType === 'solo') return [{ id:'creator_auto', name: userName, amount: balance != null ? balance : 0, isRollWinner: false }];
+  // community: seed a creator row only when a balance was given; else empty (today's behavior)
+  if (balance != null) return [{ id:'creator_auto', name: userName, amount: balance, isRollWinner: false }];
   return [];
 }
 app.post('/api/my-hunt/start', requireAuth, (req, res) => {
-  const { huntType = 'community' } = req.body;
+  const { huntType = 'community', startingBalance, currency } = req.body;
   if (huntType === 'vip' && !reqIsVipHost(req))
     return res.status(403).json({error:'Not authorised for VIP hunts'});
+  if (currency !== undefined && !['USD','CAD','ARS'].includes(currency))
+    return res.status(400).json({ error: 'Invalid currency' });
+  const bal = (Number.isFinite(+startingBalance) && +startingBalance >= 0) ? +startingBalance : undefined;
   // One active hunt per user: block a new hunt while the current one is still
   // live or has progress (bonuses/calls). The user must End or Reset it first.
   // An ended hunt (archivedAt set) or an empty fresh shell can be replaced.
@@ -584,7 +590,7 @@ app.post('/api/my-hunt/start', requireAuth, (req, res) => {
   hunts[req.user.id] = {
     user: req.user, huntId: uid(), isLive: false, startedAt: null, archivedAt: null, tenantId: req.tenant.id,
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
-    huntType, bonuses: [], equity: initialEquity(huntType, req.user, req.tenant), calls: [], invitedEditors: [], callLimit: huntType === 'solo' ? 0 : 10, huntMode: 'creating', roundRobin: true, currency: 'USD', publicCalls: false, publicCallsPin: null
+    huntType, bonuses: [], equity: initialEquity(huntType, req.user, req.tenant, bal), calls: [], invitedEditors: [], callLimit: huntType === 'solo' ? 0 : 10, huntMode: 'creating', roundRobin: true, currency: currency || 'USD', publicCalls: false, publicCallsPin: null
   };
   persistHunts();
   res.json({ok:true});
