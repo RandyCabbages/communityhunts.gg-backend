@@ -1335,6 +1335,31 @@ app.get('/api/settings/:userId', requireAuth, async (req, res) => {
   res.json({ preferredSlots: s.preferredSlots || [], rainbetName: s.rainbetName || '', twitchName: s.twitchName || '' });
 });
 
+// Does a settings row's name(s) match a typed search string?
+// Matching rules (intentionally narrow to avoid false positives):
+//   1. Exact match (case- and space-insensitive) on discordUsername or discordDisplayName.
+//   2. A stored name that *starts with* the typed search — but ONLY when the typed string is
+//      long enough (>= MIN_PREFIX_LEN) to be distinctive. This keeps "walker" -> "WalkerGames"
+//      working while preventing short/typed fragments from latching onto unrelated users.
+// The old code also matched when search.startsWith(storedName); that arm let any typed name
+// beginning with a stored alias resolve to that user (notably the owner, who sorts first),
+// auto-adding Cabbage as the equity person. That direction is removed.
+const MIN_PREFIX_LEN = 4;
+function nameMatchesSettings(s, search, searchNoSp) {
+  const candidates = [
+    (s.discordUsername    || '').toLowerCase().trim(),
+    (s.discordDisplayName || '').toLowerCase().trim(),
+  ].filter(Boolean);
+  const noSp = candidates.map(c => c.replace(/\s+/g, ''));
+  for (const c of candidates.concat(noSp)) {
+    if (!c) continue;
+    if (c === search || c === searchNoSp) return true;
+    // Only a stored name extending the typed prefix — and only for distinctive prefixes.
+    if (search.length >= MIN_PREFIX_LEN && (c.startsWith(search) || c.startsWith(searchNoSp))) return true;
+  }
+  return false;
+}
+
 // GET /api/settings/by-name/:name — look up another user's preferred slots & rainbet by their Discord username/displayName
 // Used when a hunt owner adds a member by name and we don't know their Discord ID
 app.get('/api/settings/by-name/:name', requireAuth, async (req, res) => {
@@ -1355,20 +1380,7 @@ app.get('/api/settings/by-name/:name', requireAuth, async (req, res) => {
   }
 
   // Find match by Discord username or displayName (case-insensitive, space-insensitive)
-  const match = allSettings.find(s => {
-    const candidates = [
-      (s.discordUsername    || '').toLowerCase().trim(),
-      (s.discordDisplayName || '').toLowerCase().trim(),
-    ].filter(Boolean);
-    const noSp = candidates.map(c => c.replace(/\s+/g,''));
-    for (const c of candidates.concat(noSp)) {
-      if (!c) continue;
-      if (c === search || c === searchNoSp) return true;
-      // Also match if either starts with the other (handles "walker" vs "WalkerGames")
-      if (c.startsWith(search) || search.startsWith(c)) return true;
-    }
-    return false;
-  });
+  const match = allSettings.find(s => nameMatchesSettings(s, search, searchNoSp));
 
   if (match) {
     return res.json({
@@ -1435,19 +1447,7 @@ async function resolveUserIdByName(name) {
     const bReal = /^\d{17,19}$/.test(b.userId) ? 0 : 1;
     return aReal - bReal;
   });
-  const match = rows.find(s => {
-    const candidates = [
-      (s.discordUsername    || '').toLowerCase().trim(),
-      (s.discordDisplayName || '').toLowerCase().trim(),
-    ].filter(Boolean);
-    const noSp = candidates.map(c => c.replace(/\s+/g, ''));
-    for (const c of candidates.concat(noSp)) {
-      if (!c) continue;
-      if (c === search || c === searchNoSp) return true;
-      if (c.startsWith(search) || search.startsWith(c)) return true;
-    }
-    return false;
-  });
+  const match = rows.find(s => nameMatchesSettings(s, search, searchNoSp));
   return match ? match.userId : null;
 }
 
