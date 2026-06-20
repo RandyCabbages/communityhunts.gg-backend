@@ -231,64 +231,20 @@ memberships.initMemberships({ pgPool })
 // re-bound above; they only run at request time, so wiring their deps here is in time.
 auth.initAuth({ ADMIN_IDS, VIP_IDS, SESSION_SECRET, MULTI_TENANT, tenants, admins, hunts, recordKnownUser });
 
-function huntSummary(h) {
-  return {
-    userId: h.user.id, username: h.user.displayName, avatar: h.user.avatar,
-    huntType: h.huntType, isLive: h.isLive, startedAt: h.startedAt, archivedAt: h.archivedAt||null,
-    bonusCount: h.bonuses.length,
-    totalWon: h.bonuses.reduce((s,b)=>s+b.win,0),
-    pot: h.equity.reduce((s,e)=>s+e.amount,0),
-    // Include the equity list ONLY for archived hunts — needed for per-member all-time-payout
-    // calculation on the equity cards. Live hunts omit it (bandwidth + don't expose equity publicly).
-    equity: h.archivedAt
-      ? (h.equity || []).map(e => ({ id: e.id, name: e.name, amount: e.amount, isRollWinner: !!e.isRollWinner, isMod: !!e.isMod }))
-      : undefined,
-    viewers: viewers[h.user.id]||0,
-    huntMode: h.huntMode||'creating',
-    lockTop4: h.lockTop4 ?? false,
-    rolledCount: (h.bonuses||[]).filter(b=>b.win>0).length,
-    // "Completed" == every bonus has been opened (a win recorded). Mirrors the frontend's
-    // allBonusesOpened. Drives the public Archived tab (completed-only) + the janitor.
-    completed: huntCompleted(h),
-    createdAt: h.createdAt || null, updatedAt: h.updatedAt || null,
-  };
-}
-// A hunt is "completed" when it has bonuses and all of them have been opened (win recorded).
-function huntCompleted(h) {
-  return Array.isArray(h.bonuses) && h.bonuses.length > 0 && h.bonuses.every(b => +b.win > 0);
-}
-function tenantOf(h) { return h.tenantId || 'bean'; } // untagged hunts belong to Bean (back-compat)
-function inTenant(h, tenantId) { return tenantOf(h) === (tenantId || 'bean'); }
-function getPublicHunts(tenantId)   { return Object.values(hunts).filter(h=>h.isLive && inTenant(h,tenantId) && h.user?.id !== MOD_HUNT_ID && h.user?.id !== AFFILIATE_HUNT_ID).map(huntSummary); }
-// Public Archived tab: only completed hunts (every bonus opened). Incomplete ended hunts are
-// hidden here — admins still see them in the All tab, and the janitor eventually reaps them.
-function getArchivedHunts(tenantId) { return archive.filter(h=>inTenant(h,tenantId) && huntCompleted(h)).map(huntSummary); }
-// Admin All tab: every hunt — created, live, and archived. Union of the current hunts (created/
-// live/ended) with archived snapshots whose hunt is no longer current, deduped by huntId.
-function getAllHunts(tenantId) {
-  const current = Object.values(hunts).filter(h=>inTenant(h,tenantId) && h.user?.id !== MOD_HUNT_ID && h.user?.id !== AFFILIATE_HUNT_ID);
-  const seen = new Set(current.map(h=>h.huntId).filter(Boolean));
-  const archivedOnly = archive.filter(h=>inTenant(h,tenantId) && (!h.huntId || !seen.has(h.huntId)));
-  return [...current, ...archivedOnly].map(huntSummary);
-}
-function emitHubUpdate(tenantId)    { persistHunts(); io.to('hub:'+(tenantId||'bean')).emit('hub:update', getPublicHunts(tenantId)); }
-// Strip owner-only secrets before broadcasting a hunt to the shared hunt:<id> watch room
-// (which includes non-editor viewers). The PIN is replaced by a boolean the client can gate on.
-function publicHuntView(h) {
-  if (!h) return h;
-  const { publicCallsPin, ...rest } = h;
-  return { ...rest, requiresPin: !!publicCallsPin };
-}
-function emitHuntUpdate(userId) { const h = hunts[userId]; if (h) { persistHunts(); io.to(`hunt:${userId}`).emit('hunt:update', publicHuntView(h)); } }
+// Hunt-domain read/broadcast core (huntSummary, list builders, publicHuntView secret-strip,
+// hub/hunt emit helpers, mod/affiliate hunt-key constants, uid/touch). viewers is shared by
+// reference with the sockets module so live viewer counts stay coherent. Re-bound into scope
+// so the still-inline hunt routes keep working until they move into their own routers.
+const huntsCore = require('./lib/hunts-core');
+huntsCore.initHuntsCore({ hunts, archive, viewers, io, persistHunts });
+const {
+  MOD_HUNT_ID, AFFILIATE_HUNT_ID,
+  huntSummary, huntCompleted, tenantOf, inTenant,
+  getPublicHunts, getArchivedHunts, getAllHunts,
+  emitHubUpdate, publicHuntView, emitHuntUpdate,
+  uid, touch,
+} = huntsCore;
 
-
-// ── Mod hunt access ───────────────────────────────────────────────
-const MOD_HUNT_ID = '__mod_hunt__';
-const AFFILIATE_HUNT_ID = '__affiliate_hunt__';
-
-function uid() { return Math.random().toString(36).slice(2, 8); }
-// Stamp a hunt's last-activity time so the stale-hunt janitor (cleanupStaleHunts) can measure idleness.
-function touch(userId) { const h = hunts[userId]; if (h) h.updatedAt = new Date().toISOString(); }
 
 // Reject malformed / oversized hunt payloads (memory + DoS protection).
 const MAX_BONUSES = 1000, MAX_EQUITY = 300, MAX_CALLS = 1000;
