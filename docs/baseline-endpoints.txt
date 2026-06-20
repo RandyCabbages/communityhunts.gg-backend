@@ -1,65 +1,175 @@
-219:app.get('/auth/discord', (req, res, next) => {
-223:app.get('/auth/discord/callback',
-241:app.get('/auth/logout', (req, res) => req.logout(() => res.redirect(FRONTEND_URL)));
-242:app.get('/auth/me', (req, res) => {
-252:app.get('/api/known-users', async (req, res) => {
-427:app.get('/api/hunts',          (req, res) => res.json(getPublicHunts()));
-428:app.get('/api/hunts/archived', (req, res) => res.json(getArchivedHunts()));
-433:app.get('/api/bangers', (req, res) => {
-467:app.get('/api/hunts/:userId/archived/:archivedAt', (req, res) => {
-474:app.get('/api/hunts/:userId', (req, res) => {
-527:app.get('/api/my-hunt', requireAuth, (req, res) => res.json(hunts[req.user.id] || null));
-536:app.post('/api/my-hunt/start', requireAuth, (req, res) => {
-560:app.post('/api/my-hunt/golive', requireAuth, (req, res) => {
-570:app.post('/api/my-hunt/end', requireAuth, (req, res) => {
-581:app.post('/api/my-hunt/reset', requireAuth, (req, res) => {
-597:app.put('/api/my-hunt', requireAuth, (req, res) => {
-622:app.post('/api/my-hunt/invite', requireAuth, (req, res) => {
-635:app.delete('/api/my-hunt/invite', requireAuth, (req, res) => {
-646:app.post('/api/hunts/:userId/calls', requireAuth, (req, res) => {
-684:app.put('/api/hunts/:userId', requireAuth, (req, res) => {
-704:app.get('/api/admin/hunts', requireAdmin, (req, res) => res.json(getAllHunts()));
-706:app.post('/api/admin/hunts/:userId/end', requireAdmin, (req, res) => {
-715:app.delete('/api/admin/hunts/:userId', requireAdmin, (req, res) => {
-723:app.delete('/api/admin/hunts/archived/:userId/:archivedAt', requireAdmin, (req, res) => {
-844:app.get('/api/settings', requireAuth, async (req, res) => {
-849:app.put('/api/settings', requireAuth, async (req, res) => {
-864:app.get('/api/settings/:userId', requireAuth, async (req, res) => {
-871:app.get('/api/settings/by-name/:name', requireAuth, async (req, res) => {
-919:app.post('/api/admin/set-rainbet-name', requireAdmin, async (req, res) => {
-989:app.post('/api/admin/set-user-field', requireAdmin, async (req, res) => {
-1026:app.post('/api/admin/set-preferred-slots', requireAdmin, async (req, res) => {
-1068:app.post('/api/tickets', async (req, res) => {
-1157:app.get('/api/bean-live', (req, res) => res.json(beanLive));
-1204:app.get('/api/leaderboard', async (req, res) => {
-1232:app.get('/api/discord/import-calls', requireAuth, async (req, res) => {
-1292:app.get('/api/discord/parse-winners', requireAuth, async (req, res) => {
-1517:app.get('/api/img-proxy', async (req, res) => {
-1548:app.get('/api/slots/search', async (req, res) => {
-1586:app.get('/api/health', (req, res) => res.json({ok:true}));
-1594:app.post('/api/hunts/:userId/request-calls', requireAuth, (req, res) => {
-1619:app.get('/api/hunts/:userId/call-requests', requireAuth, (req, res) => {
-1625:app.post('/api/hunts/:userId/call-requests/:requestId', requireAuth, (req, res) => {
-409:function emitHubUpdate()    { persistHunts(); io.emit('hub:update', getPublicHunts()); }
-410:function emitHuntUpdate(userId) { const h = hunts[userId]; if (h) { persistHunts(); io.to(`hunt:${userId}`).emit('hunt:update', h); } }
-566:  io.to(`hunt:${req.user.id}`).emit('hunt:update', hunts[req.user.id]);
-576:    io.to(`hunt:${req.user.id}`).emit('hunt:update', hunts[req.user.id]);
-616:  io.to(`hunt:${req.user.id}`).emit('hunt:update', hunts[req.user.id]);
-631:  io.to(`hunt:${req.user.id}`).emit('hunt:reinvite', { huntUserId: req.user.id });
-641:  io.to(`hunt:${req.user.id}`).emit('hunt:reinvite', { huntUserId: req.user.id });
-679:  io.to(`hunt:${req.params.userId}`).emit('hunt:update', hunt);
-698:  io.to(`hunt:${req.params.userId}`).emit('hunt:update', hunt);
-711:  emitHubUpdate(); io.to(`hunt:${req.params.userId}`).emit('hunt:update', h);
-1151:    io.emit('bean:live', beanLive);
-1614:  io.to(`hunt:${userId}`).emit('calls:request:new', { requests: huntCallRequests[userId] });
-1644:    io.to(`hunt:${userId}`).emit('calls:granted', { userId: reqItem.userId });
-1646:    io.to(`hunt:${userId}`).emit('calls:denied', { userId: reqItem.userId });
-1650:  io.to(`hunt:${userId}`).emit('calls:request:update', { requests: huntCallRequests[userId] });
-1659:  socket.on('watch:hub', () => {
-1661:    socket.emit('hub:update', getPublicHunts());
-1662:    socket.emit('bean:live', beanLive);
-1665:  socket.on('watch:hunt', userId => {
-1670:    if (h) socket.emit('hunt:update', h);
-1672:    socket.on('disconnect', () => {
-1679:  socket.on('leave:hunt', userId => {
-1686:  socket.on('identify', (userId) => {
+# BeanHunt backend — wire-contract baseline (regression oracle for the server.js de-slop refactor)
+# Generated 2026-06-20 from server.js @ commit 01af1d6 (2120 lines). Line numbers are CURRENT.
+# Purpose: the refactor is a pure internal restructure. NONE of the route paths, socket event
+# names, or response shapes below may change. Diff against this after every slice.
+#
+# Totals: 71 HTTP route handlers, 7 app.use() registrations, 1 io.on('connection'),
+#         4 inbound socket handlers, 8 distinct outbound socket event names.
+
+========================================================================
+APP-LEVEL MIDDLEWARE (app.use) — registration ORDER is load-bearing
+========================================================================
+160:  app.use(cors({ origin: corsOrigin, credentials: true }))
+161:  app.use(express.json({ limit: '256kb' }))
+191:  app.use(session(sessionConfig))
+192:  app.use(passport.initialize())
+193:  app.use(passport.session())
+197:  app.use((req,res,next)=>{...})         # Bearer-token fallback → req.user (also records known user)
+226:  app.use(resolveTenant)                  # sets req.tenant from X-Tenant-Slug / ?_tenant, default 'bean'
+
+========================================================================
+HTTP ROUTES (71) — grouped by concern, with gating middleware
+========================================================================
+# --- Auth (4) ---
+246:  GET    /auth/discord
+250:  GET    /auth/discord/callback
+270:  GET    /auth/logout
+271:  GET    /auth/me                                       # emits isAdmin/isVipHost/isPlatformAdmin booleans
+
+# --- Known-users + communities (4) ---
+284:  GET    /api/known-users
+302:  GET    /api/my-communities                            requireAuth
+307:  POST   /api/communities/:slug/join                    requireAuth
+315:  POST   /api/communities/:slug/leave                   requireAuth
+
+# --- Public hunts (5) ---
+451:  GET    /api/hunts                                     # getPublicHunts(req.tenant.id)
+452:  GET    /api/hunts/archived                            # MUST stay declared BEFORE /api/hunts/:userId
+457:  GET    /api/bangers
+491:  GET    /api/hunts/:userId/archived/:archivedAt
+498:  GET    /api/hunts/:userId                             # side effect: auto-link + persist + emit
+
+# --- My-hunt (10) ---
+552:  GET    /api/my-hunt                                   requireAuth
+572:  POST   /api/my-hunt/start                             requireAuth
+600:  POST   /api/my-hunt/golive                            requireAuth
+611:  POST   /api/my-hunt/end                               requireAuth
+627:  POST   /api/my-hunt/reopen                            requireAuth
+640:  POST   /api/my-hunt/reset                             requireAuth
+657:  PUT    /api/my-hunt                                   requireAuth
+689:  POST   /api/my-hunt/invite                            requireAuth
+702:  DELETE /api/my-hunt/invite                            requireAuth
+
+# --- Mod-hunt (7) — fixed key __mod_hunt__ ---
+727:  GET    /api/mod-hunt                                  requireModHuntAccess
+731:  PUT    /api/mod-hunt                                  requireModHuntAccess
+751:  POST   /api/mod-hunt/golive                           requireModHuntAccess
+762:  POST   /api/mod-hunt/end                              requireModHuntAccess
+774:  POST   /api/mod-hunt/reopen                           requireModHuntAccess
+786:  POST   /api/mod-hunt/reset                            requireModHuntAccess
+798:  GET    /api/mod-hunt/history                          requireModHuntAccess
+
+# --- Affiliate-hunt (7) — fixed key __affiliate_hunt__ ---
+830:  GET    /api/affiliate-hunt                            requireModHuntAccess
+834:  PUT    /api/affiliate-hunt                            requireModHuntAccess
+854:  POST   /api/affiliate-hunt/golive                     requireModHuntAccess
+865:  POST   /api/affiliate-hunt/end                        requireModHuntAccess
+877:  POST   /api/affiliate-hunt/reopen                     requireModHuntAccess
+889:  POST   /api/affiliate-hunt/reset                      requireModHuntAccess
+901:  GET    /api/affiliate-hunt/history                    requireModHuntAccess
+
+# --- Calls (3) ---
+952:  POST   /api/hunts/:userId/calls                       requireAuth
+965:  POST   /api/hunts/:userId/public-calls                requireAuth
+980:  PUT    /api/hunts/:userId                             requireAuth   # edit any hunt (editors)
+
+# --- Admin hunts + platform-admins (9) ---
+1006: GET    /api/admin/hunts                               requireAdmin
+1009: GET    /api/admin/overview                            requireAuth, requireAdmin
+1039: GET    /api/admin/platform-admins                     requireAuth, requirePlatformAdmin
+1074: POST   /api/admin/platform-admins                     requireAuth, requirePlatformAdmin
+1088: DELETE /api/admin/platform-admins/:id                 requireAuth, requirePlatformAdmin
+1161: POST   /api/admin/hunts/cleanup                       requireAdmin
+1163: POST   /api/admin/hunts/:userId/end                   requireAdmin
+1174: POST   /api/admin/hunts/:userId/reopen                requireAdmin
+1184: DELETE /api/admin/hunts/:userId                       requireAdmin
+1192: DELETE /api/admin/hunts/archived/:userId/:archivedAt  requireAdmin
+
+# --- User settings + admin user mgmt (9) ---
+1313: GET    /api/settings                                  requireAuth
+1318: PUT    /api/settings                                  requireAuth
+1333: GET    /api/settings/:userId                          requireAuth
+1365: GET    /api/settings/by-name/:name                    requireAuth
+1400: POST   /api/admin/set-rainbet-name                    requireAdmin
+1456: GET    /api/admin/users                               requireAuth, requireAdmin
+1500: GET    /api/admin/users/:userId                       requireAuth, requireAdmin
+1537: POST   /api/admin/set-user-field                      requireAdmin
+1574: POST   /api/admin/set-preferred-slots                 requireAdmin
+
+# --- Tickets (1) ---
+1616: POST   /api/tickets                                   # public, per-IP rate-limited (ticketHits)
+
+# --- Integrations (6) — delegate to lib/integrations.js ---
+1690: GET    /api/bean-live                                 # integrations.getLiveStatus(req.tenant.slug)
+1693: GET    /api/tenant-config                             # PUBLIC branding; field names are contract
+1704: GET    /api/tenants                                   # PUBLIC directory; field names are contract
+1714: GET    /api/leaderboard
+1727: GET    /api/discord/import-calls                      requireAuth
+1738: GET    /api/discord/parse-winners                     requireAuth
+
+# --- Slots + img-proxy (2) ---  [SLICE 1 target]
+1940: GET    /api/img-proxy                                 # sets ACAO:* and Cache-Control headers
+1971: GET    /api/slots/search                              # returns {name,slug,provider,thumb}
+
+# --- Health (1) ---
+2009: GET    /api/health                                    # {ok:true}
+
+# --- Call-permission requests (3) ---
+2017: POST   /api/hunts/:userId/request-calls               requireAuth
+2042: GET    /api/hunts/:userId/call-requests               requireAuth
+2048: POST   /api/hunts/:userId/call-requests/:requestId    requireAuth
+
+========================================================================
+SOCKET.IO — io.on('connection') @ 2081
+========================================================================
+# Inbound handlers (4):
+2085: socket.on('watch:hub')      → emits hub:update + bean:live to the joining socket
+2091: socket.on('watch:hunt')     → joins hunt:<id> room, increments viewers, emits hunt:update;
+2098:   socket.on('disconnect')   → NESTED inside watch:hunt (per-room viewer decrement). KEEP NESTED.
+2105: socket.on('leave:hunt')
+2112: socket.on('identify')
+
+# Outbound event names (8 distinct) — payload shapes are contract:
+#   hub:update            (getPublicHunts(tenantId))         emitted 387, 2087, sockets
+#   hunt:update           (publicHuntView(h) — SECRET-STRIPPED) 395,607,620,636,683,747,758,769,782,
+#                                                              850,861,872,885,897,947,1000,1153,1170,1180,2096
+#   hunt:reinvite         ({huntUserId})                     698, 708
+#   bean:live             (live state)                       2088, and lib/integrations.js:28 (Twitch poll)
+#   calls:request:new     ({requests})                       2037
+#   calls:granted         ({userId})                         2067
+#   calls:denied          ({userId})                         2069
+#   calls:request:update  ({requests})                       2073
+
+========================================================================
+SECRET-STRIPPING (publicHuntView) — must be preserved exactly
+========================================================================
+# publicHuntView(h) @ server.js ~390-394: strips publicCallsPin→requiresPin, removes equity discordId
+# for viewer payloads. Every hunt:update goes through it. A regression here leaks PIN / discord IDs.
+
+========================================================================
+ROUTE-ORDER HAZARDS (Express matches in registration order)
+========================================================================
+# /api/hunts/archived (452) MUST be registered BEFORE /api/hunts/:userId (498), else :userId
+#   swallows "archived". Preserve this relative order inside routes/hunts.routes.js.
+
+========================================================================
+LIVE RESPONSE FIXTURES — captured 2026-06-20 from a clean local boot
+(node --env-file=.env server.js, no DB → in-memory; dummy Discord/Twitch env)
+Diff exact shapes against these after each slice.
+========================================================================
+GET /api/health          -> {"ok":true}
+GET /api/hunts           -> []                       (no live hunts locally)
+GET /api/bean-live       -> {"isLive":false,"title":"","updatedAt":null}
+GET /api/tenants         -> [{"slug":"bean","displayName":"Bean","accent":"#a78bfa","twitchChannel":"bean","memberCount":0}]
+GET /api/slots/search?q=gates ->
+  [{"name":"Gates Of Anubis","slug":"gates-of-anubis","provider":"popiplay",
+    "rainbetSlug":"popiplay-gates-of-anubis","thumb":"https://cdn.rainbet.com/slots/popiplay-gates-of-anubis.jpg"}, ...]
+  # NOTE: slot objects carry 5 fields {name,slug,provider,rainbetSlug,thumb} — the rainbetSlug
+  # field is part of the contract (CLAUDE.md's 4-field {name,slug,provider,thumb} is incomplete).
+
+# Clean-boot startup markers (all must still appear after every slice):
+#   [slots] Loaded 6744 slots from rainbet_slots.json
+#   [slots] Loaded 2615 pre-verified softswiss thumbs
+#   ✅ Server on port 3001
+#   [slots] Loaded 549 reviewed thumbnails
+#   [slots] Cached <N> relevant slots (from <M> total)
