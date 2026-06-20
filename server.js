@@ -358,6 +358,7 @@ function huntSummary(h) {
       : undefined,
     viewers: viewers[h.user.id]||0,
     huntMode: h.huntMode||'creating',
+    lockTop4: h.lockTop4 ?? false,
     rolledCount: (h.bonuses||[]).filter(b=>b.win>0).length,
     // "Completed" == every bonus has been opened (a win recorded). Mirrors the frontend's
     // allBonusesOpened. Drives the public Archived tab (completed-only) + the janitor.
@@ -590,7 +591,7 @@ app.post('/api/my-hunt/start', requireAuth, (req, res) => {
   hunts[req.user.id] = {
     user: req.user, huntId: uid(), isLive: false, startedAt: null, archivedAt: null, tenantId: req.tenant.id,
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
-    huntType, bonuses: [], equity: initialEquity(huntType, req.user, req.tenant, bal), calls: [], invitedEditors: [], callLimit: huntType === 'solo' ? 0 : 10, huntMode: 'creating', roundRobin: true, currency: currency || 'USD', publicCalls: false, publicCallsPin: null
+    huntType, bonuses: [], equity: initialEquity(huntType, req.user, req.tenant, bal), calls: [], invitedEditors: [], callLimit: huntType === 'solo' ? 0 : 10, huntMode: 'hunting', roundRobin: true, lockTop4: false, currency: currency || 'USD', publicCalls: false, publicCallsPin: null
   };
   persistHunts();
   res.json({ok:true});
@@ -647,7 +648,7 @@ app.post('/api/my-hunt/reset', requireAuth, (req, res) => {
   const keepType = ['vip','solo'].includes(hunts[req.user.id]?.huntType) ? hunts[req.user.id].huntType : 'community';
   hunts[req.user.id] = { user: req.user, huntId: uid(), isLive: false, startedAt: null, archivedAt: null, tenantId: req.tenant.id,
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
-    huntType: keepType, bonuses: [], equity: initialEquity(keepType, req.user, req.tenant), calls: [], invitedEditors: [], callLimit: keepType === 'solo' ? 0 : 10, huntMode: 'creating', roundRobin: true, currency: 'USD', publicCalls: false, publicCallsPin: null };
+    huntType: keepType, bonuses: [], equity: initialEquity(keepType, req.user, req.tenant), calls: [], invitedEditors: [], callLimit: keepType === 'solo' ? 0 : 10, huntMode: 'hunting', roundRobin: true, lockTop4: false, currency: 'USD', publicCalls: false, publicCallsPin: null };
   persistHunts();
   emitHubUpdate(req.tenant.id);
   res.json({ok:true});
@@ -660,7 +661,7 @@ app.put('/api/my-hunt', requireAuth, (req, res) => {
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
     huntType: 'community', bonuses: [], equity: [], calls: [], invitedEditors: [], callLimit: 10, currency: 'USD', publicCalls: false, publicCallsPin: null
   };
-  const { bonuses, equity, calls, huntType, callLimit, huntMode, roundRobin, currency, publicCalls, publicCallsPin, currentSlot } = req.body;
+  const { bonuses, equity, calls, huntType, callLimit, huntMode, roundRobin, lockTop4, currency, publicCalls, publicCallsPin, currentSlot } = req.body;
   if (bonuses    !== undefined) hunts[req.user.id].bonuses    = bonuses;
   if (equity     !== undefined) hunts[req.user.id].equity     = equity;
   if (calls      !== undefined) hunts[req.user.id].calls      = calls;
@@ -672,6 +673,7 @@ app.put('/api/my-hunt', requireAuth, (req, res) => {
   if (callLimit  !== undefined) hunts[req.user.id].callLimit  = callLimit;
   if (huntMode   !== undefined) hunts[req.user.id].huntMode   = huntMode;
   if (roundRobin !== undefined) hunts[req.user.id].roundRobin = roundRobin;
+  if (lockTop4   !== undefined) hunts[req.user.id].lockTop4   = lockTop4;
   if (currency   !== undefined) hunts[req.user.id].currency   = currency;
   if (publicCalls    !== undefined) hunts[req.user.id].publicCalls    = publicCalls;
   if (publicCallsPin !== undefined) hunts[req.user.id].publicCallsPin = publicCallsPin;
@@ -717,8 +719,8 @@ function emptyModHunt(tenantId) {
     tenantId: tenantId || 'bean',
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
     huntType: 'solo', bonuses: [], equity: [{ id: 'bean_auto', name: 'Bean', amount: 0, isRollWinner: false }],
-    calls: [], invitedEditors: [], callLimit: 0, huntMode: 'creating',
-    roundRobin: false, currency: 'USD', publicCalls: false, publicCallsPin: null,
+    calls: [], invitedEditors: [], callLimit: 0, huntMode: 'hunting',
+    roundRobin: false, lockTop4: false, currency: 'USD', publicCalls: false, publicCallsPin: null,
   };
 }
 
@@ -729,13 +731,14 @@ app.get('/api/mod-hunt', requireModHuntAccess, (req, res) => {
 app.put('/api/mod-hunt', requireModHuntAccess, (req, res) => {
   if (rejectBadHuntInput(req, res)) return;
   if (!hunts[MOD_HUNT_ID]) hunts[MOD_HUNT_ID] = emptyModHunt(req.tenant.id);
-  const { bonuses, equity, calls, callLimit, huntMode, roundRobin, currency, currentSlot } = req.body;
+  const { bonuses, equity, calls, callLimit, huntMode, roundRobin, lockTop4, currency, currentSlot } = req.body;
   if (bonuses    !== undefined) hunts[MOD_HUNT_ID].bonuses    = bonuses;
   if (equity     !== undefined) hunts[MOD_HUNT_ID].equity     = equity;
   if (calls      !== undefined) hunts[MOD_HUNT_ID].calls      = calls;
   if (callLimit  !== undefined) hunts[MOD_HUNT_ID].callLimit  = callLimit;
   if (huntMode   !== undefined) hunts[MOD_HUNT_ID].huntMode   = huntMode;
   if (roundRobin !== undefined) hunts[MOD_HUNT_ID].roundRobin = roundRobin;
+  if (lockTop4   !== undefined) hunts[MOD_HUNT_ID].lockTop4   = lockTop4;
   if (currency   !== undefined) hunts[MOD_HUNT_ID].currency   = currency;
   if (currentSlot !== undefined) hunts[MOD_HUNT_ID].currentSlot = currentSlot;
   hunts[MOD_HUNT_ID].huntType = 'solo';
@@ -799,6 +802,7 @@ app.get('/api/mod-hunt/history', requireModHuntAccess, (req, res) => {
     bonuses: h.bonuses || [],
     equity: h.equity || [],
     huntMode: h.huntMode,
+    lockTop4: h.lockTop4 ?? false,
     startedAt: h.startedAt,
     createdAt: h.createdAt,
     totalWon: (h.bonuses || []).reduce((s, b) => s + (b.win || 0), 0),
@@ -818,8 +822,8 @@ function emptyAffiliateHunt(tenantId) {
     equity: [
       { id: 'bean_auto', name: 'Bean', amount: 1000, isRollWinner: false },
     ],
-    calls: [], invitedEditors: [], callLimit: 10, huntMode: 'creating',
-    roundRobin: true, currency: 'USD', publicCalls: false, publicCallsPin: null,
+    calls: [], invitedEditors: [], callLimit: 10, huntMode: 'hunting',
+    roundRobin: true, lockTop4: false, currency: 'USD', publicCalls: false, publicCallsPin: null,
   };
 }
 
@@ -830,13 +834,14 @@ app.get('/api/affiliate-hunt', requireModHuntAccess, (req, res) => {
 app.put('/api/affiliate-hunt', requireModHuntAccess, (req, res) => {
   if (rejectBadHuntInput(req, res)) return;
   if (!hunts[AFFILIATE_HUNT_ID]) hunts[AFFILIATE_HUNT_ID] = emptyAffiliateHunt(req.tenant.id);
-  const { bonuses, equity, calls, callLimit, huntMode, roundRobin, currency, currentSlot } = req.body;
+  const { bonuses, equity, calls, callLimit, huntMode, roundRobin, lockTop4, currency, currentSlot } = req.body;
   if (bonuses    !== undefined) hunts[AFFILIATE_HUNT_ID].bonuses    = bonuses;
   if (equity     !== undefined) hunts[AFFILIATE_HUNT_ID].equity     = equity;
   if (calls      !== undefined) hunts[AFFILIATE_HUNT_ID].calls      = calls;
   if (callLimit  !== undefined) hunts[AFFILIATE_HUNT_ID].callLimit  = callLimit;
   if (huntMode   !== undefined) hunts[AFFILIATE_HUNT_ID].huntMode   = huntMode;
   if (roundRobin !== undefined) hunts[AFFILIATE_HUNT_ID].roundRobin = roundRobin;
+  if (lockTop4   !== undefined) hunts[AFFILIATE_HUNT_ID].lockTop4   = lockTop4;
   if (currency   !== undefined) hunts[AFFILIATE_HUNT_ID].currency   = currency;
   if (currentSlot !== undefined) hunts[AFFILIATE_HUNT_ID].currentSlot = currentSlot;
   hunts[AFFILIATE_HUNT_ID].huntType = 'vip';
@@ -900,6 +905,7 @@ app.get('/api/affiliate-hunt/history', requireModHuntAccess, (req, res) => {
     bonuses: h.bonuses || [],
     equity: h.equity || [],
     huntMode: h.huntMode,
+    lockTop4: h.lockTop4 ?? false,
     startedAt: h.startedAt,
     createdAt: h.createdAt,
     totalWon: (h.bonuses || []).reduce((s, b) => s + (b.win || 0), 0),
@@ -976,7 +982,7 @@ app.put('/api/hunts/:userId', requireAuth, (req, res) => {
   const hunt = hunts[req.params.userId];
   if (!hunt) return res.status(404).json({error:'Hunt not found'});
   if (rejectBadHuntInput(req, res)) return;
-  const { bonuses, equity, calls, huntType, callLimit, huntMode, roundRobin, currency, publicCalls, publicCallsPin, currentSlot } = req.body;
+  const { bonuses, equity, calls, huntType, callLimit, huntMode, roundRobin, lockTop4, currency, publicCalls, publicCallsPin, currentSlot } = req.body;
   if (bonuses     !== undefined) hunt.bonuses     = bonuses;
   if (equity      !== undefined) hunt.equity      = equity;
   if (calls       !== undefined) hunt.calls       = calls;
@@ -984,6 +990,7 @@ app.put('/api/hunts/:userId', requireAuth, (req, res) => {
   if (callLimit   !== undefined) hunt.callLimit   = callLimit;
   if (huntMode    !== undefined) hunt.huntMode    = huntMode;
   if (roundRobin  !== undefined) hunt.roundRobin  = roundRobin;
+  if (lockTop4    !== undefined) hunt.lockTop4    = lockTop4;
   if (currency    !== undefined) hunt.currency    = currency;
   if (publicCalls    !== undefined) hunt.publicCalls    = publicCalls;
   if (publicCallsPin !== undefined) hunt.publicCallsPin = publicCallsPin;
