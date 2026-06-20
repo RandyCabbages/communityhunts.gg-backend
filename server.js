@@ -394,46 +394,10 @@ app.use(require('./routes/settings.routes')({
 
 
 // ── Socket.io ─────────────────────────────────────────────────────
-// Track socket → { watchingHuntId, user } for permission-aware updates
-const socketUsers = {};
-
-io.on('connection', socket => {
-  // Tenant slug from the handshake query (?_tenant=); defaults to bean for back-compat.
-  const slug = socket.handshake.query._tenant || 'bean';
-
-  socket.on('watch:hub', () => {
-    socket.join('hub:' + slug);
-    socket.emit('hub:update', getPublicHunts(slug));
-    socket.emit('bean:live', integrations.getLiveStatus(slug));
-  });
-
-  socket.on('watch:hunt', userId => {
-    socket.join(`hunt:${userId}`);
-    socketUsers[socket.id] = { watchingHuntId: userId };
-    viewers[userId] = (viewers[userId]||0) + 1;
-    const h = hunts[userId];
-    if (h) socket.emit('hunt:update', publicHuntView(h));
-    emitHubUpdate(tenantOf(h || {}));
-    socket.on('disconnect', () => {
-      viewers[userId] = Math.max(0,(viewers[userId]||1)-1);
-      delete socketUsers[socket.id];
-      emitHubUpdate(tenantOf(hunts[userId] || {}));
-    });
-  });
-
-  socket.on('leave:hunt', userId => {
-    socket.leave(`hunt:${userId}`);
-    if (viewers[userId]) viewers[userId] = Math.max(0, viewers[userId] - 1);
-    emitHubUpdate(tenantOf(hunts[userId] || {}));
-  });
-
-  // Client sends their user id so we can compute canEdit for them
-  socket.on('identify', (userId) => {
-    if (socketUsers[socket.id]) socketUsers[socket.id].userId = userId;
-  });
-
-  // On reinvite, socket re-fetches permissions from the API
-  // (handled client-side in WatchHunt)
+// Connection handling lives in sockets/index.js. viewers is shared by reference with
+// hunts-core so live counts stay coherent.
+require('./sockets')(io, {
+  getPublicHunts, publicHuntView, emitHubUpdate, tenantOf, integrations, viewers, hunts,
 });
 
 server.listen(PORT, () => console.log(`✅ Server on port ${PORT}`));
