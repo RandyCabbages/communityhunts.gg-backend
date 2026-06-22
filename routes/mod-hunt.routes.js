@@ -66,6 +66,18 @@ module.exports = function modHuntRoutes(deps) {
     res.json({ ok: true });
   });
 
+  // Stop broadcasting without ending/archiving — host can go live again. (See /end for the lock path.)
+  router.post('/api/mod-hunt/offline', requireModHuntAccess, (req, res) => {
+    const h = hunts[MOD_HUNT_ID];
+    if (h) {
+      h.isLive = false;
+      h.updatedAt = new Date().toISOString();
+      persistHunts();
+      io.to(`hunt:${MOD_HUNT_ID}`).emit('hunt:update', publicHuntView(h));
+    }
+    res.json({ ok: true });
+  });
+
   router.post('/api/mod-hunt/end', requireModHuntAccess, (req, res) => {
     const h = hunts[MOD_HUNT_ID];
     if (h) {
@@ -166,6 +178,18 @@ module.exports = function modHuntRoutes(deps) {
     hunts[AFFILIATE_HUNT_ID].archivedAt = null;
     persistHunts();
     io.to(`hunt:${AFFILIATE_HUNT_ID}`).emit('hunt:update', publicHuntView(hunts[AFFILIATE_HUNT_ID]));
+    res.json({ ok: true });
+  });
+
+  // Stop broadcasting without ending/archiving — host can go live again. (See /end for the lock path.)
+  router.post('/api/affiliate-hunt/offline', requireModHuntAccess, (req, res) => {
+    const h = hunts[AFFILIATE_HUNT_ID];
+    if (h) {
+      h.isLive = false;
+      h.updatedAt = new Date().toISOString();
+      persistHunts();
+      io.to(`hunt:${AFFILIATE_HUNT_ID}`).emit('hunt:update', publicHuntView(h));
+    }
     res.json({ ok: true });
   });
 

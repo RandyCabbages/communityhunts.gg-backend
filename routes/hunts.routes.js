@@ -150,6 +150,19 @@ module.exports = function huntsRoutes(deps) {
     res.json({ok:true});
   });
 
+  // Stop broadcasting WITHOUT ending: flip isLive off but leave the hunt unarchived and
+  // fully editable, so the host can go live again. (Distinct from /end, which archives + locks.)
+  router.post('/api/my-hunt/offline', requireAuth, (req, res) => {
+    const h = hunts[req.user.id];
+    if (h) {
+      h.isLive = false;
+      h.updatedAt = new Date().toISOString();
+      emitHubUpdate(req.tenant.id); // drop it from the hub's live list; also persists
+      io.to(`hunt:${req.user.id}`).emit('hunt:update', publicHuntView(h));
+    }
+    res.json({ok:true});
+  });
+
   router.post('/api/my-hunt/end', requireAuth, (req, res) => {
     const h = hunts[req.user.id];
     if (h) {
