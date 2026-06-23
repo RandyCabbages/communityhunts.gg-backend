@@ -39,8 +39,6 @@ module.exports = function huntsRoutes(deps) {
   router.get('/api/hunts/:userId', (req, res) => {
     const hunt = hunts[req.params.userId];
     if (!hunt) return res.status(404).json({error:'Hunt not found'});
-    if (!hunt.isLive && !hunt.archivedAt && !(req.user && canEditHunt(req, req.params.userId)))
-      return res.status(404).json({error:'Hunt not live'});
     const canEdit  = req.user ? canEditHunt(req, req.params.userId) : false;
 
     // Auto-link: when a logged-in viewer visits, match their Discord name to an equity entry and store their Discord ID
