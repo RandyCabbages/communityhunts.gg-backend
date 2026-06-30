@@ -51,9 +51,18 @@ const RELEVANT_PROVIDERS = new Set([
 // available providers, constructs Rainbet slugs, and finds thumbnails.
 async function trySlotReport() {
   console.log('[slot.report] fetching slot catalog + thumbnails…');
+  // slot.report's nginx now 403s requests without a same-origin Referer.
+  // Send browser-like headers so the API + thumbnail endpoints respond.
+  const slotReportHeaders = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+      + '(KHTML, like Gecko) Chrome/137.0.6934.79 Safari/537.36',
+    'Accept': 'application/json, text/plain, */*',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Referer': 'https://slot.report/',
+  };
   const [gamesRes, thumbRes] = await Promise.all([
-    fetch('https://slot.report/api/v1/slots.json'),
-    fetch('https://slot.report/data/slots-cards.js'),
+    fetch('https://slot.report/api/v1/slots.json', { headers: slotReportHeaders }),
+    fetch('https://slot.report/data/slots-cards.js', { headers: slotReportHeaders }),
   ]);
   if (!gamesRes.ok) { console.log(`[slot.report] slots.json → ${gamesRes.status}`); return null; }
 
