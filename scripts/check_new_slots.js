@@ -31,6 +31,19 @@ const SLOT_REPORT_TO_RAINBET = {
   'pineapple-play':'pineapple-play',
 };
 
+// slot.report provider_slug → SoftSwiss CDN provider segment (real thumbnails for
+// slots slot.report hasn't reviewed). Mirrors lib/slots.js + frontend slotThumb.js.
+const SOFTSWISS_PROVIDER = {
+  'pragmatic-play':'pragmatic','playngo':'playngo','hacksaw-gaming':'hacksaw',
+  'nolimit-city':'nolimitcity','elk-studios':'elk','red-tiger':'redtiger',
+  'relax-gaming':'relax','bgaming':'bgaming','thunderkick':'thunderkick',
+  'yggdrasil':'yggdrasil','push-gaming':'pushgaming','netent':'netent',
+  'quickspin':'quickspin','blueprint-gaming':'blueprint','big-time-gaming':'bigtimegaming',
+  'spinomenal':'spinomenal','isoftbet':'isoftbet','wazdan':'wazdan',
+  'iron-dog-studio':'irondog','gameart':'gameart',
+};
+const toPascal = slug => slug.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join('');
+
 const RELEVANT_PROVIDERS = new Set([
   'pragmatic-play','playngo','hacksaw-gaming','elk-studios','red-tiger',
   'relax-gaming','quickspin','blueprint-gaming','nolimit-city','bgaming',
@@ -90,23 +103,30 @@ async function trySlotReport() {
   const relevant = allGames.filter(g => RELEVANT_PROVIDERS.has(g.provider_slug));
   console.log(`[slot.report] ${relevant.length} slots from Rainbet-available providers`);
 
-  // Construct Rainbet slugs and find thumbnails
-  // Use Rainbet CDN as fallback for slots without slot.report thumbnails
+  // Construct Rainbet slugs and find thumbnails.
+  // Thumb source priority: slot.report reviewed thumb (real) → SoftSwiss CDN guess
+  // (verified later by HEAD) → none. The old cdn.rainbet.com/{name}.png pattern was
+  // dropped — Rainbet appends opaque filename suffixes (" cvf", " PR Original") so a
+  // bare-name URL 404s for every slot, and slot.report's /images/slots/{slug}-thumb.webp
+  // returns a generic placeholder for unreviewed slugs. SoftSwiss URLs that 404 are
+  // filtered out by verifyAll, so only real thumbnails ever get committed.
   const results = [];
-  let cdnFallbacks = 0;
+  let reviewedThumbs = 0, softswissGuess = 0;
   for (const g of relevant) {
     const rbProvider = SLOT_REPORT_TO_RAINBET[g.provider_slug] || g.provider_slug;
     const rainbetSlug = `${rbProvider}-${g.slug}`;
     let thumb = thumbMap[g.slug] || null;
-    if (!thumb) {
-      thumb = `https://cdn.rainbet.com/slots/${encodeURIComponent(g.name)}.png`;
-      cdnFallbacks++;
+    if (thumb) {
+      reviewedThumbs++;
+    } else {
+      const ss = SOFTSWISS_PROVIDER[g.provider_slug];
+      if (ss) { thumb = `https://cdn.softswiss.net/i/s4/${ss}/${toPascal(g.slug)}.webp`; softswissGuess++; }
     }
 
     results.push({ rainbetSlug, name: g.name, thumb });
   }
 
-  console.log(`[slot.report] ${results.length} slots ready (${results.length - cdnFallbacks} with reviewed thumbs, ${cdnFallbacks} using Rainbet CDN)`);
+  console.log(`[slot.report] ${results.length} slots ready (${reviewedThumbs} reviewed thumbs, ${softswissGuess} SoftSwiss guesses to verify, ${results.length - reviewedThumbs - softswissGuess} without a thumb source)`);
   return results.length > 100 ? results : null;
 }
 
