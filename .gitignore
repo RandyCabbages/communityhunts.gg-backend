@@ -28,3 +28,7 @@ yarn-error.log*
 build_output.txt
 react-start.log
 react-start-err.log
+
+# local-only handoff/context docs (intentionally not committed)
+CLAUDE.local.md
+PROJECT_STATE.md
