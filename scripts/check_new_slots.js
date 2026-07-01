@@ -132,16 +132,20 @@ async function trySlotReport() {
 
 // ── Rainbet New Releases scrape ─────────────────────────────────────
 // Small page, no infinite scroll — grabs the ~20-50 newest slots directly.
+//
+// Rainbet's Cloudflare sits behind a Managed Challenge that blocked vanilla
+// Playwright+stealth-plugin even with headless:false from a residential IP
+// (confirmed via cf-mitigated:challenge header — it fingerprints the Chrome
+// DevTools Protocol connection itself, not just headless-mode signals or IP
+// reputation). patchright is a patched Playwright fork that strips those CDP
+// artifacts; it replaces playwright-extra + puppeteer-extra-plugin-stealth
+// entirely — don't layer those back on top of it.
 async function scrapeNewReleases() {
-  let stealthChromium, StealthPlugin;
+  let chromium;
   try {
-    const { addExtra } = require('playwright-extra');
-    const { chromium } = require('playwright');
-    StealthPlugin = require('puppeteer-extra-plugin-stealth');
-    stealthChromium = addExtra(chromium);
-    stealthChromium.use(StealthPlugin());
+    chromium = require('patchright').chromium;
   } catch (e) {
-    console.log('[new-releases] playwright not installed — skipping');
+    console.log('[new-releases] patchright not installed — skipping');
     return [];
   }
 
@@ -149,14 +153,11 @@ async function scrapeNewReleases() {
     console.log(`[new-releases] attempt ${attempt}/2`);
     let browser;
     try {
-      browser = await stealthChromium.launch({
+      browser = await chromium.launch({
         headless: true,
-        executablePath: process.env.CHROMIUM_PATH || undefined,
-        args: ['--disable-blink-features=AutomationControlled', '--no-sandbox',
-               '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
+        channel: 'chrome', // patchright recommends real Chrome over bundled Chromium for stealth
       });
       const ctx = await browser.newContext({
-        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.6934.79 Safari/537.36',
         viewport: { width: 1280, height: 900 }, locale: 'en-US', timezoneId: 'America/Chicago',
       });
       const page = await ctx.newPage();
@@ -240,33 +241,21 @@ async function scrapeNewReleases() {
 }
 
 // ── Full catalog browser scrape ─────────────────────────────────────
+// See the patchright note above scrapeNewReleases — same Cloudflare Managed
+// Challenge applies to this page too, so this uses patchright too.
 async function scrapeBrowser() {
-  const { addExtra } = require('playwright-extra');
-  const { chromium } = require('playwright');
-  const StealthPlugin = require('puppeteer-extra-plugin-stealth');
-
-  const stealthChromium = addExtra(chromium);
-  stealthChromium.use(StealthPlugin());
+  const { chromium } = require('patchright');
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     console.log(`[scrape] attempt ${attempt}/${MAX_RETRIES}`);
     let browser;
     try {
-      browser = await stealthChromium.launch({
+      browser = await chromium.launch({
         headless: true,
-        executablePath: process.env.CHROMIUM_PATH || undefined,
-        args: [
-          '--disable-blink-features=AutomationControlled',
-          '--no-sandbox',
-          '--disable-setuid-sandbox',
-          '--disable-dev-shm-usage',
-        ],
+        channel: 'chrome',
       });
 
       const ctx = await browser.newContext({
-        userAgent:
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
-          '(KHTML, like Gecko) Chrome/137.0.6934.79 Safari/537.36',
         viewport: { width: 1280, height: 900 },
         locale: 'en-US',
         timezoneId: 'America/Chicago',

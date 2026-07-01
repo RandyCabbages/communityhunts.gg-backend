@@ -5,7 +5,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon -r dotenv/config server.js",
-    "postinstall": "playwright install --with-deps chromium || true"
+    "postinstall": "patchright install --with-deps chrome || true"
   },
   "dependencies": {
     "axios": "^1.6.7",
@@ -16,12 +16,10 @@
     "express-session": "^1.17.3",
     "passport": "^0.7.0",
     "passport-discord": "^0.1.4",
+    "patchright": "^1.61.1",
     "pg": "^8.11.3",
-    "playwright": "1.49.0",
-    "playwright-extra": "^4.3.6",
     "puppeteer": "^22.0.0",
     "puppeteer-extra": "^3.3.6",
-    "puppeteer-extra-plugin-stealth": "^2.11.2",
     "socket.io": "^4.7.4"
   }
 }
