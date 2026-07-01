@@ -110,7 +110,8 @@ const sessionConfig = {
   secret: SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
-  cookie: { secure: true, sameSite: 'none', maxAge: 7 * 24 * 60 * 60 * 1000 }
+  rolling: true, // slide expiry forward on every request — was a hard 7-day cutoff from login, logging out anyone who didn't visit weekly
+  cookie: { secure: true, sameSite: 'none', maxAge: 30 * 24 * 60 * 60 * 1000 }
 };
 if (pgPool) {
   const pgSession = require('connect-pg-simple')(session);

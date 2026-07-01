@@ -55,8 +55,12 @@ module.exports = function authRoutes(deps) {
     // Auto-attribute to the community they're browsing (Bean by default) — idempotent, so a
     // returning user keeps their original join date and this just no-ops after the first time.
     memberships.joinCommunity(req.user.id, req.tenant.id).catch(() => {});
+    // Reissue the Bearer fallback token on every check-in so it slides forward like the session
+    // cookie (rolling: true) — without this, the localStorage token still hard-expired 30 days
+    // from login even for daily visitors on cookie-blocking browsers (Safari/Brave).
     res.json({ user: { ...req.user, isAdmin: reqIsAdmin(req), isVipHost: reqIsVipHost(req), isCommunityMod: reqIsMod(req), isPlatformAdmin: isPlatformAdmin(req.user),
-      isAffiliate: !!req.user.isAffiliate, isDiscordVip: !!req.user.isDiscordVip, isDiscordMod: !!req.user.isDiscordMod } });
+      isAffiliate: !!req.user.isAffiliate, isDiscordVip: !!req.user.isDiscordVip, isDiscordMod: !!req.user.isDiscordMod },
+      token: signToken(req.user) });
   });
 
   // Public list of known users for equity-name autocomplete.
