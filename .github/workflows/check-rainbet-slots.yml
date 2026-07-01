@@ -1,9 +1,11 @@
 name: Check Rainbet for new slots
 
+# The scrape now runs every 10 min inside the live backend process on Railway
+# (see lib/rainbetSlotSync.js) — GitHub's `schedule` trigger was observed firing
+# every 1.5-5hrs instead of the configured 30 min under load, which is what let
+# new Rainbet releases sit missing for hours. This workflow is kept as a manual
+# backup/debug path only.
 on:
-  schedule:
-    # Runs every 10 minutes
-    - cron: '*/10 * * * *'
   workflow_dispatch:  # Lets you trigger manually from the Actions tab
 
 permissions:
@@ -22,12 +24,8 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Install scrape dependencies
-        run: |
-          npm install --no-save \
-            playwright@1.49.0 \
-            playwright-extra@4.3.6 \
-            puppeteer-extra-plugin-stealth@2.11.2
+      - name: Install dependencies
+        run: npm ci
 
       - name: Install Chromium for Playwright
         run: npx playwright install --with-deps chromium

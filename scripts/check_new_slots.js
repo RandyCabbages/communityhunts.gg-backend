@@ -151,6 +151,7 @@ async function scrapeNewReleases() {
     try {
       browser = await stealthChromium.launch({
         headless: true,
+        executablePath: process.env.CHROMIUM_PATH || undefined,
         args: ['--disable-blink-features=AutomationControlled', '--no-sandbox',
                '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
       });
@@ -253,6 +254,7 @@ async function scrapeBrowser() {
     try {
       browser = await stealthChromium.launch({
         headless: true,
+        executablePath: process.env.CHROMIUM_PATH || undefined,
         args: [
           '--disable-blink-features=AutomationControlled',
           '--no-sandbox',
@@ -454,7 +456,9 @@ async function verifyAll(entries) {
   return out;
 }
 
-(async () => {
+// Runs the full scrape + merge + write pipeline once. Returns a summary instead
+// of exiting the process, so it's safe to call from a long-running server.
+async function runCheck() {
   // Strategy 1: Rainbet new releases page (targeted, fast)
   const newReleases = await scrapeNewReleases().catch(e => {
     console.error('[new-releases] failed:', e.message);
@@ -489,14 +493,12 @@ async function verifyAll(entries) {
   }
 
   if (!Array.isArray(games) || games.length === 0) {
-    console.error('[check] all strategies failed — no slots extracted. Cloudflare may have blocked us.');
-    process.exit(1);
+    throw new Error('all strategies failed — no slots extracted. Cloudflare may have blocked us.');
   }
   console.log(`[check] got ${games.length} slots total`);
 
   if (!fs.existsSync(SLOTS_FILE)) {
-    console.error(`[check] ${SLOTS_FILE} not found — run from backend repo root`);
-    process.exit(1);
+    throw new Error(`${SLOTS_FILE} not found — run from backend repo root`);
   }
   const existing = JSON.parse(fs.readFileSync(SLOTS_FILE, 'utf8'));
   const seenSlugs = new Set(existing.map(s => (s.rainbetSlug || '').toLowerCase()));
@@ -535,9 +537,10 @@ async function verifyAll(entries) {
 
   if (candidates.length === 0 && removed.length === 0) {
     console.log('[check] no new slots and nothing removed — DB already up to date');
-    return;
+    return { changed: false, added: 0, removed: 0, total: existing.length };
   }
 
+  let addedCount = 0;
   if (candidates.length > 0) {
     console.log(`[check] ${candidates.length} candidate(s) not in DB; verifying thumbnails…`);
     const verified = await verifyAll(candidates);
@@ -547,11 +550,22 @@ async function verifyAll(entries) {
       kept.push(v);
       console.log(`  + ${v.name}  [${v.rainbetSlug}]`);
     }
+    addedCount = verified.length;
   }
 
-  fs.writeFileSync(SLOTS_FILE, JSON.stringify(kept, null, 2) + '\n');
+  const changed = addedCount > 0 || removed.length > 0;
+  if (changed) {
+    fs.writeFileSync(SLOTS_FILE, JSON.stringify(kept, null, 2) + '\n');
+  }
   console.log(`[check] done — file now has ${kept.length} slots (was ${existing.length})`);
-})().catch(err => {
-  console.error('[check] error:', err);
-  process.exit(1);
-});
+  return { changed, added: addedCount, removed: removed.length, total: kept.length };
+}
+
+module.exports = { runCheck };
+
+if (require.main === module) {
+  runCheck().catch(err => {
+    console.error('[check] error:', err);
+    process.exit(1);
+  });
+}

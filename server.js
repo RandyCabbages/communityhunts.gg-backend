@@ -365,6 +365,10 @@ const slots = require('./lib/slots');
 slots.prefetchSlots();
 app.use(require('./routes/slots.routes')({ slots, getSlotCallCounts }));
 
+// Checks Rainbet for newly-released slots every 10 min in-process (replaces the
+// GitHub Actions cron, which was firing every 1.5-5hrs instead of every 30 min).
+require('./lib/rainbetSlotSync').startRainbetSlotSync(slots);
+
 // Misc leaf routes: /api/bangers (reads hunts+archive), /api/tickets, /api/health.
 app.use(require('./routes/misc.routes')({ hunts, archive }));
 

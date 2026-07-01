@@ -16,6 +16,8 @@
     "passport": "^0.7.0",
     "passport-discord": "^0.1.4",
     "pg": "^8.11.3",
+    "playwright": "1.49.0",
+    "playwright-extra": "^4.3.6",
     "puppeteer": "^22.0.0",
     "puppeteer-extra": "^3.3.6",
     "puppeteer-extra-plugin-stealth": "^2.11.2",

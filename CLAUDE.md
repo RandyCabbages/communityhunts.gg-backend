@@ -205,6 +205,8 @@ ADMIN_IDS                      # comma-separated Discord IDs (defaults to owner)
 ADMINS                         # legacy display-name list (less reliable, kept for compat)
 VIP_HOSTS                      # comma-separated display names for VIP access
 CHROMIUM_PATH                  # optional: path to system Chromium binary (Railway sets via nixpacks)
+GITHUB_PAT                     # repo contents:write PAT — lets lib/rainbetSlotSync.js commit+push rainbet_slots.json
+GITHUB_REPO                    # optional: owner/repo for the push above (defaults to RandyCabbages/communityhunts-backend)
 ```
 
 ## Frontend Design Tokens (HuntTracker.js)

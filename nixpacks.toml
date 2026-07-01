@@ -1,3 +1,9 @@
+[variables]
+# lib/rainbetSlotSync.js drives playwright against the system Chromium below (via
+# the CHROMIUM_PATH env var, set separately in Railway) instead of playwright's own
+# ~300MB bundled download.
+PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = "1"
+
 [phases.setup]
 nixPkgs = [
   "chromium",
