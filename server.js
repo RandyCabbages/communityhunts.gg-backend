@@ -86,7 +86,7 @@ const {
   signToken, verifyToken,
   canEditHunt, isEquityMember,
   requireAuth, reqIsAdmin, reqIsVipHost, requireAdmin, requirePlatformAdmin,
-  canAccessModHunt, requireModHuntAccess,
+  reqIsMod, requireMod,
   resolveTenant,
 } = auth;
 
@@ -200,7 +200,7 @@ auth.initAuth({ ADMIN_IDS, VIP_IDS, SESSION_SECRET, MULTI_TENANT, tenants, admin
 const huntsCore = require('./lib/hunts-core');
 huntsCore.initHuntsCore({ hunts, archive, viewers, io, persistHunts });
 const {
-  MOD_HUNT_ID, AFFILIATE_HUNT_ID,
+  MOD_HUNT_ID, AFFILIATE_HUNT_ID, modHuntKey, affiliateHuntKey,
   huntSummary, huntCompleted, tenantOf, inTenant,
   getPublicHunts, getArchivedHunts, getAllHunts, getSlotCallCounts, getGotInLog,
   emitHubUpdate, publicHuntView, emitHuntUpdate,
@@ -211,7 +211,7 @@ const {
 // exist. Passport strategy is configured above; resolveTenant (global) already set req.tenant.
 app.use(require('./routes/auth.routes')({
   passport, FRONTEND_URL, requireAuth,
-  reqIsAdmin, reqIsVipHost, isPlatformAdmin, signToken,
+  reqIsAdmin, reqIsVipHost, reqIsMod, isPlatformAdmin, signToken,
   recordKnownUser, memberships, tenants, pgPool,
 }));
 
@@ -235,7 +235,7 @@ function rejectBadHuntInput(req, res) {
 // Public-hunt + my-hunt routes (routes/hunts.routes.js). Declaration order inside the router is
 // load-bearing: /api/hunts/archived before /api/hunts/:userId.
 app.use(require('./routes/hunts.routes')({
-  requireAuth, canEditHunt, isEquityMember, reqIsVipHost,
+  requireAuth, canEditHunt, isEquityMember, reqIsVipHost, reqIsMod,
   hunts, archive, getPublicHunts, getArchivedHunts,
   emitHubUpdate, emitHuntUpdate, publicHuntView, uid, touch,
   persistHunts, archiveHunt, unarchiveHunt, io, rejectBadHuntInput,
@@ -244,8 +244,14 @@ app.use(require('./routes/hunts.routes')({
 // Mod hunt + Affiliate hunt — two fixed-key shared hunts (routes/mod-hunt.routes.js).
 app.use(require('./routes/mod-hunt.routes')({
   hunts, archive, io, persistHunts, archiveHunt,
-  requireModHuntAccess, MOD_HUNT_ID, AFFILIATE_HUNT_ID,
+  requireMod, modHuntKey, affiliateHuntKey, tenants,
   uid, touch, publicHuntView, rejectBadHuntInput,
+}));
+
+// Tenant-mod management (routes/mods.routes.js). Owner-only add/remove; view is requireAdmin
+// (covers tenant admins + mods, post reqIsAdmin fold-in).
+app.use(require('./routes/mods.routes')({
+  requireAuth, requireAdmin, requirePlatformAdmin, tenants, pgPool,
 }));
 
 // Slot-call + call-permission routes (routes/calls.routes.js). Owns huntCallRequests state.

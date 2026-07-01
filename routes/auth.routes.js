@@ -16,7 +16,7 @@ const express = require('express');
 module.exports = function authRoutes(deps) {
   const {
     passport, FRONTEND_URL, requireAuth,
-    reqIsAdmin, reqIsVipHost, isPlatformAdmin, signToken,
+    reqIsAdmin, reqIsVipHost, reqIsMod, isPlatformAdmin, signToken,
     recordKnownUser, memberships, tenants, pgPool,
   } = deps;
   const router = express.Router();
@@ -35,7 +35,7 @@ module.exports = function authRoutes(deps) {
       const userData = Buffer.from(JSON.stringify({
         id: req.user.id, username: req.user.username,
         displayName: req.user.displayName, avatar: req.user.avatar,
-        isAdmin: reqIsAdmin(req), isVipHost: reqIsVipHost(req), isPlatformAdmin: isPlatformAdmin(req.user),
+        isAdmin: reqIsAdmin(req), isVipHost: reqIsVipHost(req), isCommunityMod: reqIsMod(req), isPlatformAdmin: isPlatformAdmin(req.user),
         isAffiliate: !!req.user.isAffiliate, isDiscordVip: !!req.user.isDiscordVip, isDiscordMod: !!req.user.isDiscordMod,
       })).toString('base64');
       const returnTo = req.session.returnTo || '/';
@@ -55,7 +55,7 @@ module.exports = function authRoutes(deps) {
     // Auto-attribute to the community they're browsing (Bean by default) — idempotent, so a
     // returning user keeps their original join date and this just no-ops after the first time.
     memberships.joinCommunity(req.user.id, req.tenant.id).catch(() => {});
-    res.json({ user: { ...req.user, isAdmin: reqIsAdmin(req), isVipHost: reqIsVipHost(req), isPlatformAdmin: isPlatformAdmin(req.user),
+    res.json({ user: { ...req.user, isAdmin: reqIsAdmin(req), isVipHost: reqIsVipHost(req), isCommunityMod: reqIsMod(req), isPlatformAdmin: isPlatformAdmin(req.user),
       isAffiliate: !!req.user.isAffiliate, isDiscordVip: !!req.user.isDiscordVip, isDiscordMod: !!req.user.isDiscordMod } });
   });
 

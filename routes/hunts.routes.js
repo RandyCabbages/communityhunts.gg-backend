@@ -16,7 +16,7 @@ const express = require('express');
 
 module.exports = function huntsRoutes(deps) {
   const {
-    requireAuth, canEditHunt, isEquityMember, reqIsVipHost,
+    requireAuth, canEditHunt, isEquityMember, reqIsMod,
     hunts, archive, getPublicHunts, getArchivedHunts,
     emitHubUpdate, emitHuntUpdate, publicHuntView, uid, touch,
     persistHunts, archiveHunt, unarchiveHunt, io, rejectBadHuntInput,
@@ -112,7 +112,7 @@ module.exports = function huntsRoutes(deps) {
 
   router.post('/api/my-hunt/start', requireAuth, (req, res) => {
     const { huntType = 'community', startingBalance, currency } = req.body;
-    if (huntType === 'vip' && !reqIsVipHost(req))
+    if (huntType === 'vip' && !reqIsMod(req))
       return res.status(403).json({error:'Not authorised for VIP hunts'});
     if (currency !== undefined && !['USD','CAD','ARS'].includes(currency))
       return res.status(400).json({ error: 'Invalid currency' });
@@ -231,7 +231,7 @@ module.exports = function huntsRoutes(deps) {
     if (equity     !== undefined) hunts[req.user.id].equity     = equity;
     if (calls      !== undefined) hunts[req.user.id].calls      = calls;
     if (huntType   !== undefined) {
-      if (huntType === 'vip' && !reqIsVipHost(req))
+      if (huntType === 'vip' && !reqIsMod(req))
         return res.status(403).json({error:'Not authorised for VIP hunt'});
       hunts[req.user.id].huntType = huntType;
     }
