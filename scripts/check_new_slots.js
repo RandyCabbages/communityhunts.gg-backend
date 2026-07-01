@@ -17,7 +17,6 @@ const path = require('path');
 
 const SLOTS_URL = 'https://rainbet.com/casino/slots';
 const SLOTS_FILE = path.join(process.cwd(), 'rainbet_slots.json');
-const MAX_VERIFY_PARALLEL = 6;
 const MAX_RETRIES = 3;
 
 // slot.report provider_slug → Rainbet URL prefix
@@ -416,29 +415,6 @@ async function scrapeBrowser() {
   return [];
 }
 
-// HEAD-check a thumb URL to make sure CDN hosts it before we commit the entry.
-async function verifyThumb(url) {
-  try {
-    const r = await fetch(url, { method: 'HEAD', redirect: 'follow' });
-    return r.ok;
-  } catch { return false; }
-}
-
-async function verifyAll(entries) {
-  const out = [];
-  for (let i = 0; i < entries.length; i += MAX_VERIFY_PARALLEL) {
-    const batch = entries.slice(i, i + MAX_VERIFY_PARALLEL);
-    const results = await Promise.all(batch.map(e =>
-      e.thumb ? verifyThumb(e.thumb) : Promise.resolve(false)
-    ));
-    batch.forEach((e, idx) => {
-      if (results[idx]) out.push(e);
-      else console.log(`  ! skipping (thumb unreachable): ${e.name}`);
-    });
-  }
-  return out;
-}
-
 // Runs the full scrape + merge + write pipeline once. Returns a summary instead
 // of exiting the process, so it's safe to call from a long-running server.
 async function runCheck() {
@@ -490,7 +466,14 @@ async function runCheck() {
     throw new Error(`${SLOTS_FILE} not found — run from backend repo root`);
   }
   const existing = JSON.parse(fs.readFileSync(SLOTS_FILE, 'utf8'));
-  const seenSlugs = new Set(existing.map(s => (s.rainbetSlug || '').toLowerCase()));
+
+  // Entries with a real thumb are done. Null-thumb entries stay eligible to be
+  // reconsidered each cycle — the frontend already renders a branded fallback tile
+  // for a missing/broken thumb (src/slotThumb.js), so there's no UX cost to adding a
+  // slot before a real image is available, and no HEAD-check gate is needed either:
+  // a guessed thumb that turns out dead just degrades to that same fallback tile.
+  const existingBySlug = new Map(existing.map(s => [(s.rainbetSlug || '').toLowerCase(), s]));
+  const seenSlugs = new Set(existing.filter(s => s.thumb).map(s => (s.rainbetSlug || '').toLowerCase()));
 
   // Detect slots removed from Rainbet — only trust this when Strategy 3 actually ran
   // (see isFullCatalog above); slot.report's curated-provider reconstruction alone
@@ -514,44 +497,48 @@ async function runCheck() {
   const candidates = [];
   for (const g of games) {
     if (seenSlugs.has(g.rainbetSlug.toLowerCase())) continue;
-    if (!g.thumb) continue;
 
     // Re-encode the path portion for safety
-    try {
-      const u = new URL(g.thumb);
-      u.pathname = u.pathname.split('/').map(seg =>
-        encodeURIComponent(decodeURIComponent(seg))
-      ).join('/');
-      g.thumb = u.toString();
-    } catch { /* leave as-is */ }
+    if (g.thumb) {
+      try {
+        const u = new URL(g.thumb);
+        u.pathname = u.pathname.split('/').map(seg =>
+          encodeURIComponent(decodeURIComponent(seg))
+        ).join('/');
+        g.thumb = u.toString();
+      } catch { /* leave as-is */ }
+    }
 
     candidates.push(g);
   }
 
-  if (candidates.length === 0 && removed.length === 0) {
-    console.log('[check] no new slots and nothing removed — DB already up to date');
-    return { changed: false, added: 0, removed: 0, total: existing.length };
-  }
-
-  let addedCount = 0;
-  if (candidates.length > 0) {
-    console.log(`[check] ${candidates.length} candidate(s) not in DB; verifying thumbnails…`);
-    const verified = await verifyAll(candidates);
-    console.log(`[check] ${verified.length} passed thumbnail verification`);
-
-    for (const v of verified) {
-      kept.push(v);
-      console.log(`  + ${v.name}  [${v.rainbetSlug}]`);
+  let addedCount = 0, upgradedCount = 0;
+  for (const g of candidates) {
+    const key = g.rainbetSlug.toLowerCase();
+    const existingEntry = existingBySlug.get(key);
+    if (existingEntry) {
+      // Was a null-thumb placeholder — upgrade it in place now that a thumb exists.
+      if (g.thumb && !existingEntry.thumb) {
+        existingEntry.thumb = g.thumb;
+        upgradedCount++;
+        console.log(`  ↑ upgraded thumbnail: ${g.name}  [${g.rainbetSlug}]`);
+      }
+    } else {
+      kept.push(g);
+      existingBySlug.set(key, g);
+      addedCount++;
+      console.log(`  + ${g.name}  [${g.rainbetSlug}]${g.thumb ? '' : ' (no thumb yet)'}`);
     }
-    addedCount = verified.length;
   }
 
-  const changed = addedCount > 0 || removed.length > 0;
+  const changed = addedCount > 0 || upgradedCount > 0 || removed.length > 0;
   if (changed) {
     fs.writeFileSync(SLOTS_FILE, JSON.stringify(kept, null, 2) + '\n');
+  } else {
+    console.log('[check] no new slots, upgrades, or removals — DB already up to date');
   }
   console.log(`[check] done — file now has ${kept.length} slots (was ${existing.length})`);
-  return { changed, added: addedCount, removed: removed.length, total: kept.length };
+  return { changed, added: addedCount, upgraded: upgradedCount, removed: removed.length, total: kept.length };
 }
 
 module.exports = { runCheck };
