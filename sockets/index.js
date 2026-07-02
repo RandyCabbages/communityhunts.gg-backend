@@ -12,7 +12,7 @@
 // was watching. Keep it nested.
 
 module.exports = function registerSockets(io, deps) {
-  const { getPublicHunts, publicHuntView, emitHubUpdate, tenantOf, integrations, viewers, hunts } = deps;
+  const { getPublicHunts, publicHuntView, emitHubUpdate, tenantOf, integrations, viewers, hunts, overdrop } = deps;
 
   // Track socket → { watchingHuntId, user } for permission-aware updates
   const socketUsers = {};
@@ -25,6 +25,14 @@ module.exports = function registerSockets(io, deps) {
       socket.join('hub:' + slug);
       socket.emit('hub:update', getPublicHunts(slug));
       socket.emit('bean:live', integrations.getLiveStatus(slug));
+    });
+
+    // OverDrop (mod-controlled stream overlay): join is READ-ONLY — sockets are
+    // unauthenticated, so all mutations go through the requireMod REST routes
+    // (routes/overdrop.routes.js). This only subscribes + syncs current state.
+    socket.on('watch:overdrop', () => {
+      socket.join('overdrop:' + slug);
+      socket.emit('overdrop:sync', overdrop.getState(slug));
     });
 
     socket.on('watch:hunt', userId => {

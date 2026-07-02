@@ -160,7 +160,26 @@ GET  /api/discord/import-calls              → import calls from Discord channe
 GET  /api/discord/parse-winners             → parse VIP winner results from Discord
 POST /api/tickets                           → send bug report via Discord DM
 GET  /api/health                            → health check
+
+GET    /api/overdrop                        → OverDrop overlay state (mods/admins)
+POST   /api/overdrop/items                  → add overlay item (image/text/video; mod-gated)
+PUT    /api/overdrop/items/:id              → update item (drag/resize/edit; mod-gated)
+DELETE /api/overdrop/items/:id              → remove item (mod-gated)
+POST   /api/overdrop/clear                  → clear all items + audio (mod-gated)
+POST   /api/overdrop/audio                  → play sound/music URL (mod-gated)
+PUT    /api/overdrop/audio                  → update volume/loop (mod-gated)
+DELETE /api/overdrop/audio                  → stop audio (mod-gated)
 ```
+
+### OverDrop (mod-controlled stream overlay)
+
+`lib/overdrop.js` + `routes/overdrop.routes.js`. Mods/admins push images, text, sounds and video
+clips onto the community's stream; OBS loads the frontend's `/:slug/overdrop/source` page, which
+joins the `overdrop:<slug>` socket room via `watch:overdrop`. **Sockets are read-only for this
+feature** (the socket layer is unauthenticated) — every mutation goes through the requireMod REST
+routes above, which broadcast the delta to the room. State is per-tenant, in-memory only
+(transient on-stream content; a deploy clearing it is expected). Media is URL-based (http/https
+enforced by `safeUrl`) — no file uploads (Railway disk is ephemeral).
 
 ## Socket.IO Events
 
@@ -172,6 +191,11 @@ calls:request:new       → new call permission request
 calls:granted           → call permission granted
 calls:denied            → call permission denied
 bean:live               → Twitch live status update
+
+watch:overdrop          ← client joins overdrop:<slug> room (read-only)
+overdrop:sync           → full OverDrop state on join
+overdrop:item:add / overdrop:item:update / overdrop:item:remove / overdrop:clear
+overdrop:audio:play / overdrop:audio:update / overdrop:audio:stop
 ```
 
 ## Slot Autocomplete

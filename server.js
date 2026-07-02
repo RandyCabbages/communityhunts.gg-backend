@@ -255,6 +255,12 @@ app.use(require('./routes/mods.routes')({
   requireAuth, requireAdmin, requirePlatformAdmin, tenants, pgPool,
 }));
 
+// OverDrop — mod-controlled stream overlay (routes/overdrop.routes.js). State + socket
+// broadcasts live in lib/overdrop.js; sockets stay read-only (see that file's security note).
+const overdrop = require('./lib/overdrop');
+overdrop.initOverdrop(io);
+app.use(require('./routes/overdrop.routes')({ requireMod, overdrop }));
+
 // Slot-call + call-permission routes (routes/calls.routes.js). Owns huntCallRequests state.
 app.use(require('./routes/calls.routes')({
   hunts, io, persistHunts,
@@ -393,6 +399,7 @@ app.use((err, req, res, next) => {
 // hunts-core so live counts stay coherent.
 require('./sockets')(io, {
   getPublicHunts, publicHuntView, emitHubUpdate, tenantOf, integrations, viewers, hunts,
+  overdrop,
 });
 
 server.listen(PORT, () => console.log(`✅ Server on port ${PORT}`));
